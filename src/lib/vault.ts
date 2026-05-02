@@ -2,6 +2,12 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
+  readConfig,
+  resolveByNameOrPath,
+  type OteamConfig,
+  type ResolvedVault,
+} from "./config.ts";
+import {
   extractFrontmatter,
   nonEmpty,
   parseLabels,
@@ -13,12 +19,101 @@ export function defaultVaultPath(): string {
   return join(homedir(), "Documents/product-vault");
 }
 
-export function resolveVaultPath(): string {
+export interface ResolveOptions {
+  flagValue?: string;
+  config?: OteamConfig;
+}
+
+export function resolveVault(opts: ResolveOptions = {}): ResolvedVault {
+  const config = opts.config ?? readConfig();
+
+  if (opts.flagValue && opts.flagValue.length > 0) {
+    const fromFlag = resolveByNameOrPath(opts.flagValue, config);
+    if (!fromFlag) {
+      throw new Error(
+        `--vault: "${opts.flagValue}" is not a registered name and not a path`,
+      );
+    }
+    return fromFlag;
+  }
+
   const env = process.env.PRODUCT_VAULT_PATH;
   if (env && env.length > 0) {
-    return env.startsWith("~") ? join(homedir(), env.slice(1)) : env;
+    const path = env.startsWith("~") ? join(homedir(), env.slice(1)) : env;
+    const named = Object.entries(config.vaults).find(([, p]) => p === path);
+    return { name: named?.[0] ?? "(env)", path };
   }
-  return defaultVaultPath();
+
+  if (config.default) {
+    const path = config.vaults[config.default];
+    if (path) return { name: config.default, path };
+  }
+
+  return { name: "(implicit)", path: defaultVaultPath() };
+}
+
+export function resolveVaultPath(opts: ResolveOptions = {}): string {
+  return resolveVault(opts).path;
+}
+
+const AGT_ID_RE = /^AGT-\d+$/;
+
+export function isAgtId(s: string): boolean {
+  return AGT_ID_RE.test(s);
+}
+
+export function findTicketFileByID(vaultPath: string, ticketID: string): string {
+  if (!isAgtId(ticketID)) {
+    throw new Error(
+      `findTicketFileByID: "${ticketID}" is not an AGT-NNN id`,
+    );
+  }
+  const ticketsRoot = join(vaultPath, "tickets");
+  const matches: string[] = [];
+  const triedStates: string[] = [];
+
+  let stateDirs: string[] = [];
+  try {
+    stateDirs = readdirSync(ticketsRoot).filter((name) => {
+      if (name.startsWith(".")) return false;
+      try {
+        return statSync(join(ticketsRoot, name)).isDirectory();
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    throw new Error(
+      `vault has no tickets/ directory at ${ticketsRoot}`,
+    );
+  }
+
+  for (const state of stateDirs) {
+    triedStates.push(state);
+    const stateDir = join(ticketsRoot, state);
+    let entries: string[] = [];
+    try {
+      entries = readdirSync(stateDir);
+    } catch {
+      continue;
+    }
+    for (const name of entries) {
+      if (!name.endsWith(".md")) continue;
+      if (name === `${ticketID}.md` || name.startsWith(`${ticketID}-`)) {
+        matches.push(join(stateDir, name));
+      }
+    }
+  }
+
+  if (matches.length === 1) return matches[0]!;
+  if (matches.length === 0) {
+    throw new Error(
+      `no ticket file matching ${ticketID}-*.md in ${ticketsRoot} (states tried: ${triedStates.join(", ") || "none"})`,
+    );
+  }
+  throw new Error(
+    `multiple files match ${ticketID} in ${ticketsRoot}:\n  ${matches.join("\n  ")}`,
+  );
 }
 
 export function readAllTickets(vaultPath?: string): VaultTicket[] {

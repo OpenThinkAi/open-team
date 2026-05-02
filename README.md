@@ -26,7 +26,7 @@ npm link
 
 ## Vault setup
 
-`open-team` reads from a `product-vault` directory. By default that's `~/Documents/product-vault`; override with `PRODUCT_VAULT_PATH`. Layout:
+`open-team` reads from a `product-vault` directory. Layout:
 
 ```
 product-vault/
@@ -38,15 +38,21 @@ product-vault/
 
 A ticket's `state:` frontmatter must always match its containing folder under `tickets/`.
 
+For the simplest single-vault setup, leave `~/Documents/product-vault` in place or set `PRODUCT_VAULT_PATH`. For multiple vaults (personal + work, etc.) see [Config & multiple vaults](#config--multiple-vaults).
+
 ## Subcommands
 
 ```sh
-oteam pull <source> <ref>          # ingest external item → tickets/triage/
-oteam assign <ticket-path>         # drive role pipeline (spawns kitty on macOS)
-oteam assign --inline <path>       # … or run inline in current terminal
-oteam list [--state <state>]       # list active tickets
-oteam archive <ticket-id>          # move done ticket to archive/YYYY-MM/
+oteam pull <source> <ref>           # ingest external item → tickets/triage/
+oteam assign <ticket-or-id>         # drive role pipeline (full path or AGT-NNN)
+oteam assign --inline <path>        # … or run inline in current terminal
+oteam list [--state <state>]        # list active tickets
+oteam archive <ticket-id>           # move done ticket to archive/YYYY-MM/
+oteam config vault add <path>       # register a vault under a name
+oteam config vault list             # show registered vaults + default
 ```
+
+Most commands accept `--vault <name-or-path>` to operate on a specific vault.
 
 Sources currently implemented: `github` (refs: `owner/repo#NN` or full issue URL). Linear/Jira/Notion ingestors land as additional files in `src/ingestors/`.
 
@@ -79,6 +85,34 @@ claude --dangerously-skip-permissions --model claude-opus-4-7 "/assign-ticket <p
 
 Requires the `claude` CLI on PATH (https://claude.com/claude-code).
 
+## Config & multiple vaults
+
+`open-team` supports any number of named vaults via `~/.open-team/config.json`. Register them with:
+
+```sh
+oteam config vault add ~/Documents/product-vault           # auto-name "product-vault"; first add becomes default
+oteam config vault add ~/Documents/work-vault --name work
+oteam config vault list
+oteam config vault default --set work
+oteam config vault remove work                              # clears default if it pointed here
+```
+
+Paths are resolved to absolute at `add` time, so the registration survives `cd`. Removing the default vault clears `default` and forces an explicit `--vault` on every subsequent command until you set a new one — there is no silent promotion.
+
+### Resolution precedence (most-specific wins)
+
+| # | Source                                            | Notes                                                |
+|---|---------------------------------------------------|------------------------------------------------------|
+| 1 | `--vault <name-or-path>` flag                     | Per-command override                                 |
+| 2 | `PRODUCT_VAULT_PATH` env var                      | One-off shell override; also propagated to spawns    |
+| 3 | `default` in `~/.open-team/config.json`           | Set via `oteam config vault default --set <name>`    |
+| 4 | `~/Documents/product-vault`                       | Implicit fallback if no config exists                |
+
+`oteam assign` adds two niceties on top:
+
+- **AGT-NNN shorthand**: `oteam assign AGT-001` walks `<vault>/tickets/<state>/` for a file whose basename starts with `AGT-001-`.
+- **Vault auto-detection from path**: passing a full path that lives inside a registered vault root makes that vault the active one for the run, even if it's not the default. The spawned `_role-run` then inherits `PRODUCT_VAULT_PATH=<that-vault>` so any follow-up `oteam pull/list/...` from the agent lands in the same vault.
+
 ## Migration from agentic-desktop
 
 agentic-desktop now keeps only the PR-side modules (`GitHubPRs`, `AIReview*`, `ClaudeCodeService`, menu-bar shell). The Issues panel, Vault module, AgentAssignmentService, and Ingestors moved here.
@@ -86,7 +120,7 @@ agentic-desktop now keeps only the PR-side modules (`GitHubPRs`, `AIReview*`, `C
 Migration steps:
 
 1. `npm install -g open-team` (or `npm link` from a local clone).
-2. Set `PRODUCT_VAULT_PATH` if your vault isn't at `~/Documents/product-vault`.
+2. Either set `PRODUCT_VAULT_PATH` if your vault isn't at `~/Documents/product-vault`, or register it via `oteam config vault add <path>` (see [Config & multiple vaults](#config--multiple-vaults)).
 3. Optionally set `OTEAM_MONITORED_ORGS=Org1,Org2` to route those repos' tickets to the "work" kitty socket (preserves the personal/work split agentic-desktop had).
 4. Delete `~/Library/Application Support/AgenticDesktop/vault-assignments.json` (panel-indicator state, no longer used).
 5. Use `oteam pull github <ref>` instead of clicking "Assign to agent" on the Issues panel.
