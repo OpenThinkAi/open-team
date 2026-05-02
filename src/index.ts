@@ -3,7 +3,6 @@ import { runPull } from "./commands/pull.ts";
 import { runList } from "./commands/list.ts";
 import { runArchive } from "./commands/archive.ts";
 import { assignTicket } from "./role-pipeline/runner.ts";
-import { runRolePipeline } from "./role-pipeline/role-run.ts";
 import { TICKET_STATES } from "./lib/types.ts";
 
 const program = new Command();
@@ -70,13 +69,6 @@ program
   .action((ticketID: string) => {
     const path = runArchive({ ticketID });
     process.stdout.write(`✅ Archived\n   ${path}\n`);
-  });
-
-program
-  .command("_role-run <ticket-path>", { hidden: true })
-  .description("Internal: SDK-native role pipeline run")
-  .action(async (ticketPath: string) => {
-    await runRolePipeline({ ticketPath });
   });
 
 program.parseAsync(process.argv).catch((err: Error) => {

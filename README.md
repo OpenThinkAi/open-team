@@ -69,7 +69,15 @@ Add a new source by writing one new `Ingestor` in `src/ingestors/<name>.ts` and 
 | `blocked`      | (stops, surfaces comment) |
 | `done`         | (stops)                   |
 
-The pipeline body lives at `src/role-pipeline/assign-ticket.md` and is bundled into `dist/`. The runner (`src/role-pipeline/runner.ts`) resolves a kitty socket on macOS, spawns a new OS window, and that window runs `oteam _role-run <path>` — which uses `query()` from `@anthropic-ai/claude-agent-sdk` to drive the pipeline with full tool access. On non-macOS / no-kitty platforms the pipeline runs inline in the calling terminal.
+The pipeline body lives at `src/role-pipeline/assign-ticket.md` and is bundled into `dist/`. On `oteam assign` the runner (`src/role-pipeline/runner.ts`) installs the bundled body into every reachable Claude profile (`~/.claude/commands/`, `~/.claude-personal/commands/`, `$CLAUDE_CONFIG_DIR/commands/`, etc.) and spawns:
+
+```
+claude --dangerously-skip-permissions --model claude-opus-4-7 "/assign-ticket <path>"
+```
+
+…inside a new kitty OS window on macOS, or inline in the calling terminal on `--inline` / non-macOS platforms. The spawned session inherits your full Claude Code environment — global `CLAUDE.md`, MCP servers, hooks, your other slash commands. The role pipeline runs there as the literal `/assign-ticket` slash command.
+
+Requires the `claude` CLI on PATH (https://claude.com/claude-code).
 
 ## Migration from agentic-desktop
 
