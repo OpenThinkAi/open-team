@@ -77,10 +77,8 @@ export function envSourcingPrefix(
   repoSlug: string | null,
 ): string {
   const lines: string[] = [`export PATH="${augmentedPATH()}"`, "set -a"];
-  const safeWorkspace =
-    workspace === "personal" || workspace === "work" ? workspace : "personal";
   lines.push(
-    `[ -r "$HOME/.open-team/env-${safeWorkspace}" ] && . "$HOME/.open-team/env-${safeWorkspace}"`,
+    `[ -r "$HOME/.open-team/env-${workspace}" ] && . "$HOME/.open-team/env-${workspace}"`,
   );
   if (repoBasename && /^[A-Za-z0-9._-]+$/.test(repoBasename)) {
     const primary = `$HOME/Development/${repoBasename}`;
@@ -132,7 +130,7 @@ export function kittyLaunch(opts: KittyLaunchOptions): {
   return { exitCode: r.status ?? -1, stderr: r.stderr ?? "" };
 }
 
-export function augmentedPATH(): string {
+function augmentedPATH(): string {
   const home = process.env.HOME ?? "";
   const base = process.env.PATH ?? "/usr/bin:/bin";
   return [

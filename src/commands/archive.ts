@@ -2,8 +2,6 @@ import { mkdirSync, renameSync } from "node:fs";
 import { basename, join } from "node:path";
 import { readAllTickets, resolveVaultPath } from "../lib/vault.ts";
 
-export class ArchiveError extends Error {}
-
 export interface ArchiveOptions {
   ticketID: string;
 }
@@ -13,10 +11,10 @@ export function runArchive(opts: ArchiveOptions): string {
   const tickets = readAllTickets(vault);
   const match = tickets.find((t) => t.id === opts.ticketID);
   if (!match) {
-    throw new ArchiveError(`no ticket found with id ${opts.ticketID}`);
+    throw new Error(`no ticket found with id ${opts.ticketID}`);
   }
   if (match.state !== "done") {
-    throw new ArchiveError(
+    throw new Error(
       `ticket ${match.id} has state="${match.state}", expected "done" before archiving`,
     );
   }

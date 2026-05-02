@@ -17,13 +17,11 @@ export interface AssignOptions {
   workInline?: boolean;
 }
 
-export class AssignError extends Error {}
-
 export async function assignTicket(opts: AssignOptions): Promise<void> {
   const ticketPath = resolve(opts.ticketPath);
   const ticket = parseTicket(ticketPath);
   if (!ticket) {
-    throw new AssignError(
+    throw new Error(
       `assign: could not parse ticket at ${ticketPath} (frontmatter unreadable)`,
     );
   }
@@ -66,7 +64,7 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
     kittyPath,
   });
   if (result.exitCode !== 0) {
-    throw new AssignError(
+    throw new Error(
       `kitty @ launch exited ${result.exitCode}: ${result.stderr || "(no stderr)"}`,
     );
   }

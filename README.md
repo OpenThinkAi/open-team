@@ -4,6 +4,8 @@ Source-agnostic vault-driven role pipeline for spawning Claude agents against ti
 
 ## Install
 
+Requires Node `>=22.5.0`.
+
 ```sh
 npm install -g open-team   # once published; see "Status" below
 ```

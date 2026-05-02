@@ -29,10 +29,13 @@ export interface VaultTicket {
   filePath: string;
 }
 
-export type TicketState =
-  | "triage"
-  | "refined"
-  | "in-progress"
-  | "qa"
-  | "blocked"
-  | "done";
+export const TICKET_STATES = [
+  "triage",
+  "refined",
+  "in-progress",
+  "qa",
+  "blocked",
+  "done",
+] as const;
+
+export type TicketState = (typeof TICKET_STATES)[number];

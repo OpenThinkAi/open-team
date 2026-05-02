@@ -1,18 +1,9 @@
 import { readAllTickets, resolveVaultPath } from "../lib/vault.ts";
-import type { VaultTicket } from "../lib/types.ts";
+import { TICKET_STATES, type VaultTicket } from "../lib/types.ts";
 
 export interface ListOptions {
   state?: string;
 }
-
-const STATE_ORDER = [
-  "triage",
-  "refined",
-  "in-progress",
-  "qa",
-  "blocked",
-  "done",
-];
 
 export function runList(opts: ListOptions): string {
   const tickets = readAllTickets(resolveVaultPath());
@@ -23,8 +14,8 @@ export function runList(opts: ListOptions): string {
   if (filtered.length === 0) return "(no tickets)";
 
   filtered.sort((a, b) => {
-    const sa = STATE_ORDER.indexOf(a.state);
-    const sb = STATE_ORDER.indexOf(b.state);
+    const sa = TICKET_STATES.indexOf(a.state as never);
+    const sb = TICKET_STATES.indexOf(b.state as never);
     if (sa !== sb) return sa - sb;
     return a.numericID - b.numericID;
   });

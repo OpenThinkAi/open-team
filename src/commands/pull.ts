@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { getIngestor, IngestorError } from "../ingestors/index.ts";
+import { getIngestor } from "../ingestors/index.ts";
 import { renderTicket } from "../lib/render.ts";
 import { normaliseSource } from "../lib/normalise.ts";
 import {
@@ -26,7 +26,9 @@ export async function runPull(opts: PullOptions): Promise<PullResult> {
   const vault = resolveVaultPath();
   const triageDir = join(vault, "tickets", "triage");
   if (!existsSync(triageDir)) {
-    throw new IngestorError(`vault triage dir missing at ${triageDir}`);
+    throw new Error(
+      `vault triage dir missing at ${triageDir} — create it or set PRODUCT_VAULT_PATH`,
+    );
   }
 
   const ingestor = getIngestor(opts.source);
@@ -45,7 +47,7 @@ export async function runPull(opts: PullOptions): Promise<PullResult> {
   const filename = `${id}-${slug}.md`;
   const target = join(triageDir, filename);
   if (existsSync(target)) {
-    throw new IngestorError(
+    throw new Error(
       `target already exists at ${target} — ID scan collision`,
     );
   }

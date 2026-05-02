@@ -19,10 +19,3 @@ export interface Ingestor {
   readonly type: string;
   fetch(ref: string): Promise<SourcePayload>;
 }
-
-export class IngestorError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "IngestorError";
-  }
-}

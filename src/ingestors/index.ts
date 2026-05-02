@@ -1,5 +1,5 @@
 import { GitHubIngestor } from "./github.ts";
-import { IngestorError, type Ingestor } from "./types.ts";
+import type { Ingestor } from "./types.ts";
 
 const REGISTRY: Record<string, () => Ingestor> = {
   github: () => new GitHubIngestor(),
@@ -8,12 +8,11 @@ const REGISTRY: Record<string, () => Ingestor> = {
 export function getIngestor(type: string): Ingestor {
   const factory = REGISTRY[type];
   if (!factory) {
-    throw new IngestorError(
+    throw new Error(
       `unknown source "${type}" — supported: ${Object.keys(REGISTRY).join(", ")}`,
     );
   }
   return factory();
 }
 
-export { IngestorError } from "./types.ts";
 export type { Ingestor, NormalisedTicket, SourcePayload } from "./types.ts";

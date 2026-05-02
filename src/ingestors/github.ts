@@ -1,9 +1,5 @@
 import { execFileSync } from "node:child_process";
-import {
-  IngestorError,
-  type Ingestor,
-  type SourcePayload,
-} from "./types.ts";
+import type { Ingestor, SourcePayload } from "./types.ts";
 
 export class GitHubIngestor implements Ingestor {
   readonly type = "github";
@@ -16,7 +12,7 @@ export class GitHubIngestor implements Ingestor {
     try {
       raw = execFileSync("gh", ["api", path], { encoding: "utf8" });
     } catch (err) {
-      throw new IngestorError(
+      throw new Error(
         `gh api ${path} failed: ${(err as Error).message}`,
       );
     }
@@ -50,7 +46,7 @@ function parseRef(ref: string): { owner: string; repo: string; number: number } 
   if (slug) {
     return { owner: slug[1]!, repo: slug[2]!, number: parseInt(slug[3]!, 10) };
   }
-  throw new IngestorError(
+  throw new Error(
     `unrecognized github ref "${ref}" — expected owner/repo#NN or full issue URL`,
   );
 }

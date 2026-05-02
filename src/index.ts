@@ -4,6 +4,7 @@ import { runList } from "./commands/list.ts";
 import { runArchive } from "./commands/archive.ts";
 import { assignTicket } from "./role-pipeline/runner.ts";
 import { runRolePipeline } from "./role-pipeline/role-run.ts";
+import { TICKET_STATES } from "./lib/types.ts";
 
 const program = new Command();
 
@@ -47,23 +48,14 @@ program
     await assignTicket({ ticketPath, workInline: opts.inline });
   });
 
-const KNOWN_STATES = [
-  "triage",
-  "refined",
-  "in-progress",
-  "qa",
-  "blocked",
-  "done",
-];
-
 program
   .command("list")
   .description("List active tickets")
   .option("--state <state>", "Filter by ticket state (triage|refined|...)")
   .action((opts: { state?: string }) => {
-    if (opts.state && !KNOWN_STATES.includes(opts.state)) {
+    if (opts.state && !(TICKET_STATES as readonly string[]).includes(opts.state)) {
       process.stderr.write(
-        `oteam list: unknown state "${opts.state}" — supported: ${KNOWN_STATES.join(", ")}\n`,
+        `oteam list: unknown state "${opts.state}" — supported: ${TICKET_STATES.join(", ")}\n`,
       );
       process.exit(2);
     }
