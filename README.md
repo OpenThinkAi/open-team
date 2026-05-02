@@ -39,10 +39,11 @@ A ticket's `state:` frontmatter must always match its containing folder under `t
 ## Subcommands
 
 ```sh
-oteam pull <source> <ref>     # ingest external item → tickets/triage/
-oteam assign <ticket-path>    # drive role pipeline (spawns kitty on macOS)
-oteam list [--state <state>]  # list active tickets
-oteam archive <ticket-id>     # move done ticket to archive/YYYY-MM/
+oteam pull <source> <ref>          # ingest external item → tickets/triage/
+oteam assign <ticket-path>         # drive role pipeline (spawns kitty on macOS)
+oteam assign --inline <path>       # … or run inline in current terminal
+oteam list [--state <state>]       # list active tickets
+oteam archive <ticket-id>          # move done ticket to archive/YYYY-MM/
 ```
 
 Sources currently implemented: `github` (refs: `owner/repo#NN` or full issue URL). Linear/Jira/Notion ingestors land as additional files in `src/ingestors/`.

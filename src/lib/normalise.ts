@@ -42,7 +42,6 @@ Return only the JSON described in your instructions.`;
       systemPrompt: SYSTEM_PROMPT,
       tools: [],
       model: "claude-sonnet-4-6",
-      persistSession: false,
     },
   })) {
     if ("result" in message && typeof message.result === "string") {

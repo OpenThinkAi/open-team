@@ -24,28 +24,34 @@ export async function runRolePipeline(opts: RoleRunOptions): Promise<void> {
       includePartialMessages: true,
     },
   })) {
-    handleMessage(message);
+    handleMessage(message as unknown);
   }
+}
+
+interface StreamEventDelta {
+  type?: string;
+  text?: string;
+}
+
+interface StreamEvent {
+  type?: string;
+  delta?: StreamEventDelta;
+}
+
+interface SDKMessage {
+  type?: string;
+  event?: StreamEvent;
 }
 
 function handleMessage(message: unknown): void {
   if (!message || typeof message !== "object") return;
-  const m = message as { type?: string; event?: { type?: string; delta?: { type?: string; text?: string } }; message?: { content?: unknown }; subtype?: string; result?: unknown };
-
-  if (m.type === "stream_event" && m.event) {
-    const ev = m.event;
-    if (ev.type === "content_block_delta" && ev.delta?.type === "text_delta" && ev.delta.text) {
-      process.stdout.write(ev.delta.text);
+  const m = message as SDKMessage;
+  if (m.type === "stream_event" && m.event?.type === "content_block_delta") {
+    const delta = m.event.delta;
+    if (delta?.type === "text_delta" && delta.text) {
+      process.stdout.write(delta.text);
     }
-    return;
-  }
-
-  if (m.type === "assistant" && m.message?.content) {
-    return;
-  }
-
-  if (m.type === "result") {
+  } else if (m.type === "result") {
     process.stdout.write("\n");
-    return;
   }
 }

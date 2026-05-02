@@ -1,6 +1,5 @@
-import { spawnSync, execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
-import { homedir } from "node:os";
 
 const SOCKET_BASENAME = "kitty-claudini";
 const KNOWN_INSTANCES = ["personal", "work"] as const;
@@ -77,7 +76,7 @@ export function envSourcingPrefix(
   repoBasename: string | null,
   repoSlug: string | null,
 ): string {
-  const lines: string[] = ["set -a"];
+  const lines: string[] = [`export PATH="${augmentedPATH()}"`, "set -a"];
   const safeWorkspace =
     workspace === "personal" || workspace === "work" ? workspace : "personal";
   lines.push(
@@ -88,6 +87,10 @@ export function envSourcingPrefix(
     lines.push(`[ -r "${primary}/.env" ] && . "${primary}/.env"`);
     lines.push(`[ -r "${primary}/.env.local" ] && . "${primary}/.env.local"`);
   }
+  // repoSlug is "<owner>-<name>" (slashes already replaced + lowercased by the
+  // caller in role-pipeline/runner.ts), so the regex must accept hyphens but
+  // not slashes — otherwise the only legal slug ("owner/name") never matched
+  // and this branch was unreachable.
   if (repoSlug && /^[a-z0-9._-]+$/.test(repoSlug)) {
     lines.push(
       `[ -r "$HOME/.open-team/env-${repoSlug}" ] && . "$HOME/.open-team/env-${repoSlug}"`,
@@ -130,7 +133,7 @@ export function kittyLaunch(opts: KittyLaunchOptions): {
 }
 
 export function augmentedPATH(): string {
-  const home = homedir();
+  const home = process.env.HOME ?? "";
   const base = process.env.PATH ?? "/usr/bin:/bin";
   return [
     "/opt/homebrew/bin",
@@ -144,5 +147,3 @@ export function augmentedPATH(): string {
 export function shellEscape(s: string): string {
   return s.replace(/'/g, "'\\''");
 }
-
-export { execFileSync };

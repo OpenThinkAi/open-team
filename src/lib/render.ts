@@ -11,6 +11,8 @@ export interface RenderInput {
 export function renderTicket(input: RenderInput): string {
   const { id, payload, normalised, todayISO, fetchedAtISO } = input;
   const safeTitle = payload.title.replace(/"/g, '\\"');
+  const safeURL = payload.url.replace(/"/g, '\\"');
+  const safeID = payload.id.replace(/"/g, '\\"');
   const labels =
     normalised.labels.length === 0
       ? "[]"
@@ -29,7 +31,7 @@ export function renderTicket(input: RenderInput): string {
     "linked-pr: ",
     "priority: medium",
     `labels: ${labels}`,
-    `source: { type: ${payload.type}, url: "${payload.url}", id: "${payload.id}", fetched-at: "${fetchedAtISO}" }`,
+    `source: { type: ${payload.type}, url: "${safeURL}", id: "${safeID}", fetched-at: "${fetchedAtISO}" }`,
     "---",
   ].join("\n");
 

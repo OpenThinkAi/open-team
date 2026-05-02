@@ -9,5 +9,4 @@ export default defineConfig({
   shims: false,
   splitting: true,
   banner: { js: "#!/usr/bin/env node" },
-  loader: { ".md": "text" },
 });

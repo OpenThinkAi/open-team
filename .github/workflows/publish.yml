@@ -78,6 +78,13 @@ jobs:
         if: steps.private.outputs.skip == 'false' && steps.check.outputs.published == 'false'
         run: npm run typecheck
 
+      # `npx -y npm@latest publish` (rather than bare `npm publish`): Node 22
+      # ships npm 10.x which supports OIDC for provenance signing but NOT for
+      # registry-PUT auth — that needs npm 11.5.1+. `npm install -g npm@latest`
+      # fails on hosted runners (MODULE_NOT_FOUND on promise-retry as the
+      # running npm replaces its own modules mid-flight). npx fetches a clean
+      # npm@latest per-run without touching the globally-installed npm.
+      # Pattern lifted verbatim from stamp-cli's publish.yml.
       - name: publish
         if: steps.private.outputs.skip == 'false' && steps.check.outputs.published == 'false'
         run: npx -y npm@latest publish --access public --provenance --tag "${{ steps.version.outputs.dist_tag }}"

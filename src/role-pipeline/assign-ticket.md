@@ -2,7 +2,7 @@
 description: Drive a ticket from the product-vault through its role pipeline. Argument: absolute path to the ticket's .md file.
 ---
 
-You are working an `product-vault` ticket. The user clicked "Assign to agent" on a ticket inside agentic-desktop; that launcher spawned this terminal and invoked you with this slash command. Your job is to advance the ticket one role at a time, pause for human alignment at the right boundaries, and stop.
+You are working a `product-vault` ticket. The user invoked `oteam assign <path>`; the open-team CLI spawned this terminal and is running you via `@anthropic-ai/claude-agent-sdk`. Your job is to advance the ticket one role at a time, pause for human alignment at the right boundaries, and stop.
 
 **Argument**: `$ARGUMENTS` — absolute path to the ticket's `.md` file (e.g. `/Users/mattpardini/Documents/product-vault/tickets/triage/AGT-002-file-ticket-slash-command.md`).
 
@@ -13,7 +13,7 @@ You are working an `product-vault` ticket. The user clicked "Assign to agent" on
 3. **No commits, no PRs, no Linear.** Vault tickets do not necessarily map to a code repo. Only act on code if the ticket's `repo:` field is set AND the work demands it.
 4. **STOP at every role-handoff boundary.** When your role is done, write a STOP marker (visual banner per Output discipline below) and let the human decide whether to continue.
 5. **3-attempt cap on any failing operation.** If a step fails (e.g., file mv fails, frontmatter parse fails, build/test fails), you get 3 tries before STOPPing.
-6. **Never read or write inside the user's primary checkout.** The user's `~/Development/<repo>` working tree may have uncommitted in-flight work; entangling with it is a sterile-field violation. If the spike or implementation needs to touch repo code, isolate first via `git worktree add` (preferred when the repo is local) or `git clone` (when it isn't) into `/tmp/agentic-desktop-issues/<ticket-id-lowercased>/repo`. See Phase 3 Step 0 for the canonical recipe — Phase 4b reuses the same workspace.
+6. **Never read or write inside the user's primary checkout.** The user's `~/Development/<repo>` working tree may have uncommitted in-flight work; entangling with it is a sterile-field violation. If the spike or implementation needs to touch repo code, isolate first via `git worktree add` (preferred when the repo is local) or `git clone` (when it isn't) into `/tmp/open-team-issues/<ticket-id-lowercased>/repo`. See Phase 3 Step 0 for the canonical recipe — Phase 4b reuses the same workspace.
 
 ## Phase 0 — Read the ticket
 
@@ -67,7 +67,7 @@ Write the comment in this shape:
 
 ```sh
 TICKET_ID_LC=$(echo "$TICKET_ID" | tr '[:upper:]' '[:lower:]')
-WORKSPACE="/tmp/agentic-desktop-issues/$TICKET_ID_LC"
+WORKSPACE="/tmp/open-team-issues/$TICKET_ID_LC"
 # REPO_SLUG is "<owner>/<name>" from `repo:` if set, else inferred from the ticket
 # (e.g. AGT-007 implies mattpardini/agentic-desktop). When inferring, name it
 # explicitly in your spike notes so the human can correct you.
@@ -145,7 +145,7 @@ This subsumes the GitHub-source pipeline. Steps:
 **1. Workspace.** Reuse the isolated worktree from Phase 3 Step 0 if it exists:
 
 ```sh
-WORKSPACE="/tmp/agentic-desktop-issues/$(echo "$TICKET_ID" | tr '[:upper:]' '[:lower:]')"
+WORKSPACE="/tmp/open-team-issues/$(echo "$TICKET_ID" | tr '[:upper:]' '[:lower:]')"
 cd "$WORKSPACE/repo"
 ```
 
@@ -194,12 +194,12 @@ Branch name: `agt/<ticket-id-lowercased>` (e.g. `agt/agt-003`). Vault ticket IDs
 
 1. Tell the user (in the terminal) exactly what's missing, e.g. *"yarn install failed — needs `NPM_TOKEN` and `FA_NPM_AUTH_TOKEN`. Where can I source them from? Paste a path to a working `.env`/`.npmrc`, or paste `KEY=VALUE` lines directly."*
 2. Wait for the user's response.
-3. If they give a path: read it, copy/append the relevant `KEY=VALUE` lines to `~/.agentic-desktop/env-<owner>-<name>` (lowercased, e.g. `~/.agentic-desktop/env-anglepoint-inc-ui-quiver`). `mkdir -p ~/.agentic-desktop && chmod 700 ~/.agentic-desktop` first; `chmod 600` the file after writing. Don't overwrite existing keys silently — append new ones; if a key already exists with a different value, ask before changing it.
+3. If they give a path: read it, copy/append the relevant `KEY=VALUE` lines to `~/.open-team/env-<owner>-<name>` (lowercased, e.g. `~/.open-team/env-anglepoint-inc-ui-quiver`). `mkdir -p ~/.open-team && chmod 700 ~/.open-team` first; `chmod 600` the file after writing. Don't overwrite existing keys silently — append new ones; if a key already exists with a different value, ask before changing it.
 4. If they paste raw `KEY=VALUE` lines: write them to the same file with the same chmod.
-5. Re-source in the current shell: `set -a; . ~/.agentic-desktop/env-<owner>-<name>; set +a`.
+5. Re-source in the current shell: `set -a; . ~/.open-team/env-<owner>-<name>; set +a`.
 6. Retry the failing command. If it now works, continue normally. If it fails for a *different* reason, that's a regular failure — count it against the 3-attempt cap.
 
-The Swift spawn wrapper already sources `~/.agentic-desktop/env-<owner>-<name>` if it exists, so values written here are inherited automatically by every future spawn for this repo. One-time setup per repo, not per session.
+The `oteam` spawn wrapper already sources `~/.open-team/env-<owner>-<name>` (and `~/.open-team/env-<personal|work>`) if they exist, so values written here are inherited automatically by every future spawn for this repo. One-time setup per repo, not per session.
 
 When tests pass:
 

@@ -1,6 +1,6 @@
-import { resolve, basename } from "node:path";
+import { resolve, basename, dirname } from "node:path";
 import {
-  augmentedPATH,
+  envSourcingPrefix,
   findKittyBinary,
   findKittySocket,
   isMacOS,
@@ -47,12 +47,16 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
   }
 
   const oteamBin = process.argv[1] ?? "oteam";
-  const cwd = ticketPath.replace(/\/[^/]+$/, "");
+  const cwd = dirname(ticketPath);
   const title = `Vault · ${basename(ticketPath)}`;
   const escapedBin = shellEscape(oteamBin);
   const escapedTicket = shellEscape(ticketPath);
-  const env = `export PATH="${augmentedPATH()}"; `;
-  const shellCmd = `${env}exec '${escapedBin}' _role-run '${escapedTicket}'`;
+  const repoBasename = ticket.repo?.split("/").pop() ?? null;
+  const repoSlug = ticket.repo
+    ? ticket.repo.replace(/\//g, "-").toLowerCase()
+    : null;
+  const envPrefix = envSourcingPrefix(preferring, repoBasename, repoSlug);
+  const shellCmd = `${envPrefix}exec '${escapedBin}' _role-run '${escapedTicket}'`;
 
   const result = kittyLaunch({
     socket,

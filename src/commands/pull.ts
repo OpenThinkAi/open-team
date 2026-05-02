@@ -16,7 +16,13 @@ export interface PullOptions {
   ref: string;
 }
 
-export async function runPull(opts: PullOptions): Promise<string> {
+export interface PullResult {
+  path: string;
+  reused: boolean;
+  ticketID: string;
+}
+
+export async function runPull(opts: PullOptions): Promise<PullResult> {
   const vault = resolveVaultPath();
   const triageDir = join(vault, "tickets", "triage");
   if (!existsSync(triageDir)) {
@@ -30,10 +36,7 @@ export async function runPull(opts: PullOptions): Promise<string> {
     (t) => t.source.id === payload.id,
   );
   if (existing) {
-    process.stderr.write(
-      `oteam pull: idempotent — reusing existing ticket ${existing.id} for ${payload.id}\n`,
-    );
-    return existing.filePath;
+    return { path: existing.filePath, reused: true, ticketID: existing.id };
   }
 
   const normalised = await normaliseSource(payload);
@@ -55,5 +58,5 @@ export async function runPull(opts: PullOptions): Promise<string> {
     fetchedAtISO: nowISOTimestamp(),
   });
   writeFileSync(target, body);
-  return target;
+  return { path: target, reused: false, ticketID: id };
 }

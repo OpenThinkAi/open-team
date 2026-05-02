@@ -14,23 +14,25 @@ program
   )
   .version("0.0.1");
 
+async function handlePull(source: string, ref: string): Promise<void> {
+  const result = await runPull({ source, ref });
+  const verb = result.reused ? "Reused existing" : "Filed";
+  process.stdout.write(`✅ ${verb} ${result.ticketID}\n   ${result.path}\n`);
+}
+
 program
   .command("pull <source> <ref>")
   .description(
     "Ingest an external item into the vault as a triage ticket (sources: github)",
   )
-  .action(async (source: string, ref: string) => {
-    const path = await runPull({ source, ref });
-    process.stdout.write(`✅ Filed ticket\n   ${path}\n`);
-  });
+  .action(handlePull);
 
+// Hidden alias kept to satisfy AGT-004 AC #2's literal `ingest` wording while
+// AC #8 governs the user-facing verb (`pull`). Drop once docs settle.
 program
   .command("ingest <source> <ref>", { hidden: true })
   .description("Hidden alias for `pull`.")
-  .action(async (source: string, ref: string) => {
-    const path = await runPull({ source, ref });
-    process.stdout.write(`✅ Filed ticket\n   ${path}\n`);
-  });
+  .action(handlePull);
 
 program
   .command("assign <ticket-path>")
@@ -45,11 +47,26 @@ program
     await assignTicket({ ticketPath, workInline: opts.inline });
   });
 
+const KNOWN_STATES = [
+  "triage",
+  "refined",
+  "in-progress",
+  "qa",
+  "blocked",
+  "done",
+];
+
 program
   .command("list")
   .description("List active tickets")
   .option("--state <state>", "Filter by ticket state (triage|refined|...)")
   .action((opts: { state?: string }) => {
+    if (opts.state && !KNOWN_STATES.includes(opts.state)) {
+      process.stderr.write(
+        `oteam list: unknown state "${opts.state}" — supported: ${KNOWN_STATES.join(", ")}\n`,
+      );
+      process.exit(2);
+    }
     process.stdout.write(runList(opts) + "\n");
   });
 
