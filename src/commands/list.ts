@@ -3,10 +3,11 @@ import { TICKET_STATES, type VaultTicket } from "../lib/types.ts";
 
 export interface ListOptions {
   state?: string;
+  vault?: string;
 }
 
 export function runList(opts: ListOptions): string {
-  const tickets = readAllTickets(resolveVaultPath());
+  const tickets = readAllTickets(resolveVaultPath({ flagValue: opts.vault }));
   const filtered = opts.state
     ? tickets.filter((t) => t.state === opts.state)
     : tickets.filter((t) => t.state !== "done");

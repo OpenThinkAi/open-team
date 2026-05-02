@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import {
   mkdirSync,
@@ -8,7 +8,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseTicket, readAllTickets } from "../src/lib/vault.ts";
+import {
+  findTicketFileByID,
+  isAgtId,
+  parseTicket,
+  readAllTickets,
+  resolveVault,
+} from "../src/lib/vault.ts";
 
 const SAMPLE = `---
 id: AGT-042
@@ -64,6 +70,170 @@ describe("parseTicket", () => {
     } finally {
       rmSync(root, { recursive: true });
     }
+  });
+});
+
+describe("isAgtId", () => {
+  it("matches AGT-001 / AGT-1234", () => {
+    assert.equal(isAgtId("AGT-001"), true);
+    assert.equal(isAgtId("AGT-1234"), true);
+  });
+  it("rejects full filenames and lowercase", () => {
+    assert.equal(isAgtId("AGT-001-foo.md"), false);
+    assert.equal(isAgtId("agt-001"), false);
+    assert.equal(isAgtId("/abs/path"), false);
+  });
+});
+
+describe("findTicketFileByID", () => {
+  it("finds a ticket across state subfolders", () => {
+    const root = mkdtempSync(join(tmpdir(), "vault-find-"));
+    try {
+      mkdirSync(join(root, "tickets", "triage"), { recursive: true });
+      mkdirSync(join(root, "tickets", "in-progress"), { recursive: true });
+      writeFileSync(join(root, "tickets", "triage", "AGT-001-foo.md"), "x");
+      writeFileSync(
+        join(root, "tickets", "in-progress", "AGT-002-bar.md"),
+        "x",
+      );
+      const path = findTicketFileByID(root, "AGT-002");
+      assert.equal(path, join(root, "tickets", "in-progress", "AGT-002-bar.md"));
+    } finally {
+      rmSync(root, { recursive: true });
+    }
+  });
+
+  it("throws with candidate list on multi-match", () => {
+    const root = mkdtempSync(join(tmpdir(), "vault-find-"));
+    try {
+      mkdirSync(join(root, "tickets", "triage"), { recursive: true });
+      mkdirSync(join(root, "tickets", "refined"), { recursive: true });
+      writeFileSync(join(root, "tickets", "triage", "AGT-001-a.md"), "x");
+      writeFileSync(join(root, "tickets", "refined", "AGT-001-b.md"), "x");
+      assert.throws(
+        () => findTicketFileByID(root, "AGT-001"),
+        /multiple files match AGT-001/,
+      );
+    } finally {
+      rmSync(root, { recursive: true });
+    }
+  });
+
+  it("throws with states tried on zero matches", () => {
+    const root = mkdtempSync(join(tmpdir(), "vault-find-"));
+    try {
+      mkdirSync(join(root, "tickets", "triage"), { recursive: true });
+      mkdirSync(join(root, "tickets", "refined"), { recursive: true });
+      let caught: Error | null = null;
+      try {
+        findTicketFileByID(root, "AGT-099");
+      } catch (e) {
+        caught = e as Error;
+      }
+      assert.ok(caught, "expected throw");
+      assert.match(caught!.message, /no ticket file matching AGT-099/);
+      assert.match(caught!.message, /triage/);
+      assert.match(caught!.message, /refined/);
+    } finally {
+      rmSync(root, { recursive: true });
+    }
+  });
+
+  it("throws when tickets/ does not exist", () => {
+    const root = mkdtempSync(join(tmpdir(), "vault-find-"));
+    try {
+      assert.throws(
+        () => findTicketFileByID(root, "AGT-001"),
+        /no tickets\//,
+      );
+    } finally {
+      rmSync(root, { recursive: true });
+    }
+  });
+
+  it("rejects non-AGT-NNN inputs", () => {
+    assert.throws(() => findTicketFileByID("/x", "not-an-id"), /not an AGT-NNN id/);
+  });
+});
+
+describe("resolveVault precedence", () => {
+  let savedHome: string | undefined;
+  let savedEnvVault: string | undefined;
+  let fakeHome = "";
+
+  beforeEach(() => {
+    savedHome = process.env.HOME;
+    savedEnvVault = process.env.PRODUCT_VAULT_PATH;
+    fakeHome = mkdtempSync(join(tmpdir(), "oteam-home-"));
+    process.env.HOME = fakeHome;
+    delete process.env.PRODUCT_VAULT_PATH;
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    if (savedEnvVault === undefined) delete process.env.PRODUCT_VAULT_PATH;
+    else process.env.PRODUCT_VAULT_PATH = savedEnvVault;
+    rmSync(fakeHome, { recursive: true, force: true });
+  });
+
+  it("flag wins over env over config default", async () => {
+    const flagPath = join(fakeHome, "from-flag");
+    const envPath = join(fakeHome, "from-env");
+    const cfgPath = join(fakeHome, "from-config");
+    mkdirSync(flagPath);
+    mkdirSync(envPath);
+    mkdirSync(cfgPath);
+
+    const config = {
+      vaults: { d: cfgPath, f: flagPath },
+      default: "d",
+    };
+    process.env.PRODUCT_VAULT_PATH = envPath;
+
+    assert.equal(
+      resolveVault({ flagValue: "f", config }).path,
+      flagPath,
+      "flag wins",
+    );
+
+    assert.equal(
+      resolveVault({ config }).path,
+      envPath,
+      "env wins over config default when no flag",
+    );
+
+    delete process.env.PRODUCT_VAULT_PATH;
+    assert.equal(
+      resolveVault({ config }).path,
+      cfgPath,
+      "config default applies when no flag and no env",
+    );
+
+    assert.equal(
+      resolveVault({ config: { vaults: {}, default: null } }).name,
+      "(implicit)",
+      "implicit fallback when nothing configured",
+    );
+  });
+
+  it("flag accepts an absolute path that's not registered", () => {
+    const r = resolveVault({
+      flagValue: "/absolute/somewhere",
+      config: { vaults: {}, default: null },
+    });
+    assert.equal(r.path, "/absolute/somewhere");
+  });
+
+  it("flag throws on bare unknown name", () => {
+    assert.throws(
+      () =>
+        resolveVault({
+          flagValue: "ghost",
+          config: { vaults: {}, default: null },
+        }),
+      /not a registered name and not a path/,
+    );
   });
 });
 

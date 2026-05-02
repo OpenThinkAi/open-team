@@ -71,10 +71,15 @@ export function findKittySocket(
   return null;
 }
 
+export interface EnvPrefixOptions {
+  vaultPath?: string;
+}
+
 export function envSourcingPrefix(
   workspace: Instance,
   repoBasename: string | null,
   repoSlug: string | null,
+  extras: EnvPrefixOptions = {},
 ): string {
   const lines: string[] = [`export PATH="${augmentedPATH()}"`, "set -a"];
   lines.push(
@@ -95,6 +100,12 @@ export function envSourcingPrefix(
     );
   }
   lines.push("set +a");
+  // Override after env-file sourcing: the run-resolved vault wins over whatever
+  // an env file might have set, so the spawned agent's `oteam pull/list/...`
+  // calls land in the same vault this run is operating on.
+  if (extras.vaultPath) {
+    lines.push(`export PRODUCT_VAULT_PATH='${shellEscape(extras.vaultPath)}'`);
+  }
   return lines.join("; ") + "; ";
 }
 

@@ -4,10 +4,11 @@ import { readAllTickets, resolveVaultPath } from "../lib/vault.ts";
 
 export interface ArchiveOptions {
   ticketID: string;
+  vault?: string;
 }
 
 export function runArchive(opts: ArchiveOptions): string {
-  const vault = resolveVaultPath();
+  const vault = resolveVaultPath({ flagValue: opts.vault });
   const tickets = readAllTickets(vault);
   const match = tickets.find((t) => t.id === opts.ticketID);
   if (!match) {

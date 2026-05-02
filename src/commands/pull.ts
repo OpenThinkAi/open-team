@@ -14,6 +14,7 @@ import { readAllTickets, resolveVaultPath } from "../lib/vault.ts";
 export interface PullOptions {
   source: string;
   ref: string;
+  vault?: string;
 }
 
 export interface PullResult {
@@ -23,7 +24,7 @@ export interface PullResult {
 }
 
 export async function runPull(opts: PullOptions): Promise<PullResult> {
-  const vault = resolveVaultPath();
+  const vault = resolveVaultPath({ flagValue: opts.vault });
   const triageDir = join(vault, "tickets", "triage");
   if (!existsSync(triageDir)) {
     throw new Error(
