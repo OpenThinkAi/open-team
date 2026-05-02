@@ -15,16 +15,27 @@ program
   )
   .version("0.0.1");
 
+async function handlePull(source: string, ref: string): Promise<void> {
+  const result = await runPull({ source, ref });
+  const verb = result.reused ? "Reused existing" : "Filed";
+  process.stdout.write(`✅ ${verb} ${result.ticketID}\n   ${result.path}\n`);
+}
+
 program
   .command("pull <source> <ref>")
   .description(
     "Ingest an external item into the vault as a triage ticket (sources: github)",
   )
-  .action(async (source: string, ref: string) => {
-    const result = await runPull({ source, ref });
-    const verb = result.reused ? "Reused existing" : "Filed";
-    process.stdout.write(`✅ ${verb} ${result.ticketID}\n   ${result.path}\n`);
-  });
+  .action(handlePull);
+
+// `ingest` is the literal verb AC #2 enumerates; `pull` is the user-facing
+// verb per AC #8 ("vault pulls, not source pushes") and Spike Decision 5.
+// Hidden alias keeps both ACs satisfied without doubling the documented
+// surface — `oteam ingest <source> <ref>` runs the same handler as `pull`.
+program
+  .command("ingest <source> <ref>", { hidden: true })
+  .description("Hidden alias for `pull`.")
+  .action(handlePull);
 
 program
   .command("assign <ticket-path>")
