@@ -17,8 +17,6 @@ export interface ResolvedVault {
   path: string;
 }
 
-const EMPTY_CONFIG: OteamConfig = { vaults: {}, default: null };
-
 export function configDir(): string {
   return join(homedir(), ".open-team");
 }
@@ -30,12 +28,10 @@ export function configPath(): string {
 export function readConfig(): OteamConfig {
   const path = configPath();
   if (!existsSync(path)) return { vaults: {}, default: null };
-  let raw: string;
-  try {
-    raw = readFileSync(path, "utf8");
-  } catch {
-    return { vaults: {}, default: null };
-  }
+  // existsSync already covers not-found; let real I/O errors (perms, etc.)
+  // propagate so the user can fix them rather than silently falling back to
+  // an empty config — which a subsequent writeConfig would then clobber.
+  const raw = readFileSync(path, "utf8");
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -167,7 +163,7 @@ export function findVaultRootForPath(
 }
 
 function normalise(parsed: unknown): OteamConfig {
-  if (!parsed || typeof parsed !== "object") return { ...EMPTY_CONFIG };
+  if (!parsed || typeof parsed !== "object") return { vaults: {}, default: null };
   const obj = parsed as { vaults?: unknown; default?: unknown };
   const vaults: Record<string, string> = {};
   if (obj.vaults && typeof obj.vaults === "object") {

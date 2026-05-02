@@ -11,17 +11,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import * as cfg from "../src/lib/config.ts";
 
 let savedHome: string | undefined;
 let fakeHome = "";
-
-async function loadConfigModule(): Promise<typeof import("../src/lib/config.ts")> {
-  // Import fresh each test so the module's view of homedir() reflects $HOME.
-  // (homedir() on POSIX reads $HOME at call time, but importing fresh keeps
-  //  any future caching safe.)
-  const mod = await import(`../src/lib/config.ts?t=${Date.now()}-${Math.random()}`);
-  return mod as typeof import("../src/lib/config.ts");
-}
 
 beforeEach(() => {
   savedHome = process.env.HOME;
@@ -39,7 +32,6 @@ afterEach(() => {
 
 describe("config: addVault", () => {
   it("registers a vault, derives name from basename, sets default on first add", async () => {
-    const cfg = await loadConfigModule();
     const vaultDir = join(fakeHome, "Documents", "product-vault");
     mkdirSync(vaultDir, { recursive: true });
 
@@ -54,7 +46,6 @@ describe("config: addVault", () => {
   });
 
   it("collides on a taken name → suggests --name <other>", async () => {
-    const cfg = await loadConfigModule();
     const a = join(fakeHome, "a");
     const b = join(fakeHome, "b");
     mkdirSync(a);
@@ -67,7 +58,6 @@ describe("config: addVault", () => {
   });
 
   it("re-adding a path is idempotent and does not change default", async () => {
-    const cfg = await loadConfigModule();
     const a = join(fakeHome, "a");
     const b = join(fakeHome, "b");
     mkdirSync(a);
@@ -81,7 +71,6 @@ describe("config: addVault", () => {
   });
 
   it("auto-numbers a colliding basename when --name not passed", async () => {
-    const cfg = await loadConfigModule();
     const a = join(fakeHome, "x", "vault");
     const b = join(fakeHome, "y", "vault");
     mkdirSync(a, { recursive: true });
@@ -93,7 +82,6 @@ describe("config: addVault", () => {
   });
 
   it("resolves relative paths to absolute at add time", async () => {
-    const cfg = await loadConfigModule();
     const vaultDir = join(fakeHome, "rel-target");
     mkdirSync(vaultDir);
     const cwd = process.cwd();
@@ -107,7 +95,6 @@ describe("config: addVault", () => {
   });
 
   it("expands ~/ to the home dir", async () => {
-    const cfg = await loadConfigModule();
     const vaultDir = join(fakeHome, "tilde-target");
     mkdirSync(vaultDir);
     const r = cfg.addVault("~/tilde-target");
@@ -117,7 +104,6 @@ describe("config: addVault", () => {
 
 describe("config: removeVault", () => {
   it("clears default when removing the default vault", async () => {
-    const cfg = await loadConfigModule();
     const a = join(fakeHome, "a");
     const b = join(fakeHome, "b");
     mkdirSync(a);
@@ -132,7 +118,6 @@ describe("config: removeVault", () => {
   });
 
   it("does not clear default when removing a non-default", async () => {
-    const cfg = await loadConfigModule();
     const a = join(fakeHome, "a");
     const b = join(fakeHome, "b");
     mkdirSync(a);
@@ -146,7 +131,6 @@ describe("config: removeVault", () => {
   });
 
   it("can remove by absolute path", async () => {
-    const cfg = await loadConfigModule();
     const a = join(fakeHome, "a");
     mkdirSync(a);
     cfg.addVault(a, { name: "personal" });
@@ -155,14 +139,12 @@ describe("config: removeVault", () => {
   });
 
   it("throws on unknown name", async () => {
-    const cfg = await loadConfigModule();
     assert.throws(() => cfg.removeVault("nope"), /no vault registered/);
   });
 });
 
 describe("config: setDefault", () => {
   it("updates the default", async () => {
-    const cfg = await loadConfigModule();
     const a = join(fakeHome, "a");
     const b = join(fakeHome, "b");
     mkdirSync(a);
@@ -174,14 +156,12 @@ describe("config: setDefault", () => {
   });
 
   it("throws on unknown name", async () => {
-    const cfg = await loadConfigModule();
     assert.throws(() => cfg.setDefault("nope"), /no vault registered/);
   });
 });
 
 describe("config: resolveByNameOrPath", () => {
   it("resolves a registered name", async () => {
-    const cfg = await loadConfigModule();
     const a = join(fakeHome, "a");
     mkdirSync(a);
     cfg.addVault(a, { name: "personal" });
@@ -190,13 +170,11 @@ describe("config: resolveByNameOrPath", () => {
   });
 
   it("resolves an unregistered absolute path", async () => {
-    const cfg = await loadConfigModule();
     const r = cfg.resolveByNameOrPath("/some/absolute/path");
     assert.equal(r?.path, "/some/absolute/path");
   });
 
   it("returns null for an unknown bare name (no slash)", async () => {
-    const cfg = await loadConfigModule();
     const r = cfg.resolveByNameOrPath("nope");
     assert.equal(r, null);
   });
@@ -204,7 +182,6 @@ describe("config: resolveByNameOrPath", () => {
 
 describe("config: findVaultRootForPath", () => {
   it("returns the registered vault when the path lives inside it", async () => {
-    const cfg = await loadConfigModule();
     const root = join(fakeHome, "vault-root");
     mkdirSync(join(root, "tickets", "triage"), { recursive: true });
     cfg.addVault(root, { name: "personal" });
@@ -215,7 +192,6 @@ describe("config: findVaultRootForPath", () => {
   });
 
   it("returns null when the path is outside any registered vault", async () => {
-    const cfg = await loadConfigModule();
     const root = join(fakeHome, "vault-root");
     mkdirSync(root);
     cfg.addVault(root, { name: "personal" });
@@ -224,7 +200,6 @@ describe("config: findVaultRootForPath", () => {
   });
 
   it("does not match a sibling whose name is a prefix", async () => {
-    const cfg = await loadConfigModule();
     const a = join(fakeHome, "vault");
     const b = join(fakeHome, "vault-extra");
     mkdirSync(a);
@@ -237,14 +212,12 @@ describe("config: findVaultRootForPath", () => {
 
 describe("config: malformed config file", () => {
   it("throws a useful error on invalid JSON", async () => {
-    const cfg = await loadConfigModule();
     mkdirSync(cfg.configDir(), { recursive: true });
     writeFileSync(cfg.configPath(), "not valid json");
     assert.throws(() => cfg.readConfig(), /not valid JSON/);
   });
 
   it("ignores a default that points at an unregistered name", async () => {
-    const cfg = await loadConfigModule();
     mkdirSync(cfg.configDir(), { recursive: true });
     writeFileSync(
       cfg.configPath(),
@@ -256,7 +229,6 @@ describe("config: malformed config file", () => {
 
 describe("config: empty state", () => {
   it("readConfig returns empty when the file does not exist", async () => {
-    const cfg = await loadConfigModule();
     const r = cfg.readConfig();
     assert.deepEqual(r, { vaults: {}, default: null });
     assert.ok(!existsSync(cfg.configPath()));
