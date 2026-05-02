@@ -23,6 +23,15 @@ export async function runRolePipeline(opts: RoleRunOptions): Promise<void> {
     options: {
       model: ROLE_PIPELINE_MODEL,
       permissionMode: "bypassPermissions",
+      // SDK default is "inherit from parent". `_role-run` is a bare Node
+      // process with no parent SDK context, so omitting this resolves to no
+      // tools — the agent narrates ("now I'll set up the worktree") without
+      // ever invoking Bash/Read/etc. Declare the standard agentic toolkit
+      // explicitly. The role-pipeline prompt body needs all of these:
+      // Read/Write/Edit (frontmatter + comments), Bash (mv between state
+      // folders, gh, swift build, npm test), Glob/Grep (scan vault, find
+      // call sites), TodoWrite (the prompt expects task-tracking).
+      tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "TodoWrite"],
       includePartialMessages: true,
     },
   })) {
