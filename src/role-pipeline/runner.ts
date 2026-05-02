@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { resolve, basename, dirname } from "node:path";
 import {
   envSourcingPrefix,
@@ -8,8 +9,9 @@ import {
   preferredKittyContext,
   shellEscape,
 } from "../lib/kitty.ts";
+import { ROLE_PIPELINE_MODEL } from "../lib/models.ts";
 import { parseTicket } from "../lib/vault.ts";
-import { runRolePipeline } from "./role-run.ts";
+import { installRolePipelineSlashCommand } from "./install-slash-command.ts";
 
 export interface AssignOptions {
   ticketPath: string;
@@ -26,10 +28,20 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
     );
   }
 
+  // Make sure the spawned `claude` session can find `/assign-ticket`.
+  installRolePipelineSlashCommand();
+
+  const claudePath = findToolOnPath("claude");
+  if (!claudePath) {
+    throw new Error(
+      "claude CLI not found on PATH — install Claude Code (https://claude.com/claude-code) first",
+    );
+  }
+
   const kittyPath =
     !opts.workInline && isMacOS() ? findKittyBinary() : null;
   if (!kittyPath) {
-    await runRolePipeline({ ticketPath });
+    runInline(claudePath, ticketPath);
     return;
   }
 
@@ -40,21 +52,26 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
     process.stderr.write(
       `oteam assign: no kitty socket reachable (preferring "${preferring}"); falling back to inline run.\n`,
     );
-    await runRolePipeline({ ticketPath });
+    runInline(claudePath, ticketPath);
     return;
   }
 
-  const oteamBin = process.argv[1] ?? "oteam";
   const cwd = dirname(ticketPath);
   const title = `Vault · ${basename(ticketPath)}`;
-  const escapedBin = shellEscape(oteamBin);
-  const escapedTicket = shellEscape(ticketPath);
   const repoBasename = ticket.repo?.split("/").pop() ?? null;
   const repoSlug = ticket.repo
     ? ticket.repo.replace(/\//g, "-").toLowerCase()
     : null;
   const envPrefix = envSourcingPrefix(preferring, repoBasename, repoSlug);
-  const shellCmd = `${envPrefix}exec '${escapedBin}' _role-run '${escapedTicket}'`;
+  // `/assign-ticket <path>` is the literal first prompt the spawned claude
+  // session sees. The slash-command body is installed by
+  // installRolePipelineSlashCommand() above; claude resolves it from the
+  // session's CLAUDE_CONFIG_DIR/commands/ directory.
+  const escapedClaude = shellEscape(claudePath);
+  const escapedTicket = shellEscape(ticketPath);
+  const slashPrompt = `/assign-ticket ${escapedTicket}`;
+  const escapedPrompt = shellEscape(slashPrompt);
+  const shellCmd = `${envPrefix}exec '${escapedClaude}' --dangerously-skip-permissions --model ${ROLE_PIPELINE_MODEL} '${escapedPrompt}'`;
 
   const result = kittyLaunch({
     socket,
@@ -68,6 +85,28 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
       `kitty @ launch exited ${result.exitCode}: ${result.stderr || "(no stderr)"}`,
     );
   }
+}
+
+function runInline(claudePath: string, ticketPath: string): void {
+  // Spawn claude in the current terminal with the slash command pre-typed,
+  // inheriting stdio so the user can interact with the session normally.
+  const r = spawnSync(
+    claudePath,
+    [
+      "--dangerously-skip-permissions",
+      "--model", ROLE_PIPELINE_MODEL,
+      `/assign-ticket ${ticketPath}`,
+    ],
+    { stdio: "inherit" },
+  );
+  if (r.status != null && r.status !== 0) process.exit(r.status);
+}
+
+function findToolOnPath(name: string): string | null {
+  const r = spawnSync("/usr/bin/env", ["which", name], { encoding: "utf8" });
+  if (r.status !== 0) return null;
+  const path = (r.stdout || "").trim();
+  return path.length > 0 ? path : null;
 }
 
 function readMonitoredOrgsFromEnv(): string[] {
