@@ -1,0 +1,97 @@
+name: publish
+
+# Publishes to npm only when package.json declares a version that isn't
+# already on the registry. Auth: Trusted Publishing via OIDC. No NPM_TOKEN
+# secret; the npm package must have a Trusted Publisher configured on the
+# npm side pointing at this repo + workflow filename.
+#
+# Note: package.json currently has `"private": true`. Until that flips,
+# this workflow will short-circuit at the `private check` step. Flip
+# `private` to `false` (or remove the field) when ready to publish.
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: private check
+        id: private
+        run: |
+          PRIVATE=$(node -p "require('./package.json').private === true")
+          if [ "$PRIVATE" = "true" ]; then
+            echo "package.json is private:true — publish workflow no-ops until flipped."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: read target version
+        if: steps.private.outputs.skip == 'false'
+        id: version
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          if [[ "$VERSION" == *-* ]]; then
+            DIST_TAG="${VERSION#*-}"
+            DIST_TAG="${DIST_TAG%%.*}"
+          else
+            DIST_TAG="latest"
+          fi
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "dist_tag=$DIST_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: check npm registry
+        if: steps.private.outputs.skip == 'false'
+        id: check
+        run: |
+          if npm view "${{ steps.version.outputs.name }}@${{ steps.version.outputs.version }}" version >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: install
+        if: steps.private.outputs.skip == 'false' && steps.check.outputs.published == 'false'
+        run: npm ci
+
+      - name: typecheck
+        if: steps.private.outputs.skip == 'false' && steps.check.outputs.published == 'false'
+        run: npm run typecheck
+
+      # `npx -y npm@latest publish` (rather than bare `npm publish`): Node 22
+      # ships npm 10.x which supports OIDC for provenance signing but NOT for
+      # registry-PUT auth — that needs npm 11.5.1+. `npm install -g npm@latest`
+      # fails on hosted runners (MODULE_NOT_FOUND on promise-retry as the
+      # running npm replaces its own modules mid-flight). npx fetches a clean
+      # npm@latest per-run without touching the globally-installed npm.
+      # Pattern lifted verbatim from stamp-cli's publish.yml.
+      - name: publish
+        if: steps.private.outputs.skip == 'false' && steps.check.outputs.published == 'false'
+        run: npx -y npm@latest publish --access public --provenance --tag "${{ steps.version.outputs.dist_tag }}"
+
+      - name: tag release
+        if: steps.private.outputs.skip == 'false' && steps.check.outputs.published == 'false'
+        run: |
+          TAG="v${{ steps.version.outputs.version }}"
+          git tag "$TAG"
+          git push origin "$TAG"
