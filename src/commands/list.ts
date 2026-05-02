@@ -13,9 +13,10 @@ export function runList(opts: ListOptions): string {
 
   if (filtered.length === 0) return "(no tickets)";
 
+  const order: readonly string[] = TICKET_STATES;
   filtered.sort((a, b) => {
-    const sa = TICKET_STATES.indexOf(a.state as never);
-    const sb = TICKET_STATES.indexOf(b.state as never);
+    const sa = order.indexOf(a.state);
+    const sb = order.indexOf(b.state);
     if (sa !== sb) return sa - sb;
     return a.numericID - b.numericID;
   });

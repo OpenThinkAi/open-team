@@ -1,6 +1,7 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { ROLE_PIPELINE_MODEL } from "../lib/models.ts";
 import { buildRolePipelineMessage } from "./prompt.ts";
 
 export interface RoleRunOptions {
@@ -16,16 +17,18 @@ export async function runRolePipeline(opts: RoleRunOptions): Promise<void> {
 
   const prompt = buildRolePipelineMessage(ticketPath);
 
+  let sawResult = false;
   for await (const message of query({
     prompt,
     options: {
-      model: "claude-opus-4-7",
+      model: ROLE_PIPELINE_MODEL,
       permissionMode: "bypassPermissions",
       includePartialMessages: true,
     },
   })) {
-    handleMessage(message as unknown);
+    if (handleMessage(message as unknown)) sawResult = true;
   }
+  if (!sawResult) process.stdout.write("\n");
 }
 
 interface StreamEventDelta {
@@ -43,15 +46,19 @@ interface SDKMessage {
   event?: StreamEvent;
 }
 
-function handleMessage(message: unknown): void {
-  if (!message || typeof message !== "object") return;
+function handleMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") return false;
   const m = message as SDKMessage;
   if (m.type === "stream_event" && m.event?.type === "content_block_delta") {
     const delta = m.event.delta;
     if (delta?.type === "text_delta" && delta.text) {
       process.stdout.write(delta.text);
     }
-  } else if (m.type === "result") {
-    process.stdout.write("\n");
+    return false;
   }
+  if (m.type === "result") {
+    process.stdout.write("\n");
+    return true;
+  }
+  return false;
 }

@@ -53,6 +53,9 @@ export function slugify(title: string): string {
       lastWasHyphen = true;
     }
   }
+  // Strip → truncate → strip again: the truncation can land mid-run-of-hyphens
+  // (e.g. trimming "...-c" out of a longer slug), so the second strip cleans up
+  // any trailing hyphen the truncation leaves behind.
   let slug = current.replace(/-+$/, "");
   if (slug.length > 50) slug = slug.slice(0, 50);
   slug = slug.replace(/-+$/, "");

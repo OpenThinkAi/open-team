@@ -15,25 +15,16 @@ program
   )
   .version("0.0.1");
 
-async function handlePull(source: string, ref: string): Promise<void> {
-  const result = await runPull({ source, ref });
-  const verb = result.reused ? "Reused existing" : "Filed";
-  process.stdout.write(`✅ ${verb} ${result.ticketID}\n   ${result.path}\n`);
-}
-
 program
   .command("pull <source> <ref>")
   .description(
     "Ingest an external item into the vault as a triage ticket (sources: github)",
   )
-  .action(handlePull);
-
-// Hidden alias kept to satisfy AGT-004 AC #2's literal `ingest` wording while
-// AC #8 governs the user-facing verb (`pull`). Drop once docs settle.
-program
-  .command("ingest <source> <ref>", { hidden: true })
-  .description("Hidden alias for `pull`.")
-  .action(handlePull);
+  .action(async (source: string, ref: string) => {
+    const result = await runPull({ source, ref });
+    const verb = result.reused ? "Reused existing" : "Filed";
+    process.stdout.write(`✅ ${verb} ${result.ticketID}\n   ${result.path}\n`);
+  });
 
 program
   .command("assign <ticket-path>")

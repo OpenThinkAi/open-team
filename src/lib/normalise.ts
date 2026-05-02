@@ -1,5 +1,6 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { NormalisedTicket, SourcePayload } from "../ingestors/types.ts";
+import { NORMALISER_MODEL } from "./models.ts";
 
 const SYSTEM_PROMPT = `You normalise unstructured work-item payloads (GitHub issues, Linear tickets, etc.) into well-formed product-vault tickets.
 
@@ -41,7 +42,7 @@ Return only the JSON described in your instructions.`;
     options: {
       systemPrompt: SYSTEM_PROMPT,
       tools: [],
-      model: "claude-sonnet-4-6",
+      model: NORMALISER_MODEL,
     },
   })) {
     if ("result" in message && typeof message.result === "string") {
