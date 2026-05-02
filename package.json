@@ -1,0 +1,47 @@
+{
+  "name": "open-team",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Source-agnostic vault-driven role pipeline for spawning Claude agents against tickets",
+  "bin": {
+    "oteam": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup && cp src/role-pipeline/assign-ticket.md dist/assign-ticket.md",
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --import tsx 'tests/**/*.test.ts'",
+    "prepublishOnly": "npm run build"
+  },
+  "homepage": "https://openthink.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OpenThinkAi/open-team.git"
+  },
+  "keywords": [
+    "cli",
+    "agents",
+    "vault",
+    "role-pipeline",
+    "ai",
+    "local-first"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.114",
+    "commander": "^13.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.1",
+    "tsup": "^8.4.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3"
+  }
+}
