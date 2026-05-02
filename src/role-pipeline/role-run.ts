@@ -27,10 +27,10 @@ export async function runRolePipeline(opts: RoleRunOptions): Promise<void> {
       // process with no parent SDK context, so omitting this resolves to no
       // tools — the agent narrates ("now I'll set up the worktree") without
       // ever invoking Bash/Read/etc. Declare the standard agentic toolkit
-      // explicitly. The role-pipeline prompt body needs all of these:
-      // Read/Write/Edit (frontmatter + comments), Bash (mv between state
-      // folders, gh, swift build, npm test), Glob/Grep (scan vault, find
-      // call sites), TodoWrite (the prompt expects task-tracking).
+      // explicitly. Read/Write/Edit cover frontmatter + comments; Bash
+      // covers mv between state folders, gh, git, stamp, swift build,
+      // npm test; Glob/Grep cover vault scans + call-site lookups;
+      // TodoWrite is the standard agentic toolkit (cheap to include).
       tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "TodoWrite"],
       includePartialMessages: true,
     },
