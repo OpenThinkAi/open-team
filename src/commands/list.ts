@@ -4,13 +4,19 @@ import { TICKET_STATES, type VaultTicket } from "../lib/types.ts";
 export interface ListOptions {
   state?: string;
   vault?: string;
+  project?: string;
 }
 
 export function runList(opts: ListOptions): string {
   const tickets = readAllTickets(resolveVaultPath({ flagValue: opts.vault }));
-  const filtered = opts.state
+  let filtered = opts.state
     ? tickets.filter((t) => t.state === opts.state)
     : tickets.filter((t) => t.state !== "done");
+
+  if (opts.project) {
+    const target = opts.project;
+    filtered = filtered.filter((t) => t.project === target);
+  }
 
   if (filtered.length === 0) return "(no tickets)";
 
@@ -27,6 +33,7 @@ export function runList(opts: ListOptions): string {
 
 function formatTicket(t: VaultTicket): string {
   const teamMark = t.team ? ` [${t.team}]` : "";
+  const projectMark = t.project ? ` (${t.project})` : "";
   const repo = t.repo ? `  ${t.repo}` : "";
-  return `${t.state.padEnd(12)} ${t.id}${teamMark}  ${t.title}${repo}`;
+  return `${t.state.padEnd(12)} ${t.id}${teamMark}${projectMark}  ${t.title}${repo}`;
 }

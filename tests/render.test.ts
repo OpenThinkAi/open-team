@@ -28,6 +28,7 @@ describe("renderTicket → parseTicket round-trip", () => {
         },
         todayISO: "2026-05-02",
         fetchedAtISO: "2026-05-02T10:00:00.000Z",
+        project: "my-project",
       });
       const path = join(root, "AGT-099-x.md");
       writeFileSync(path, body);
@@ -35,6 +36,7 @@ describe("renderTicket → parseTicket round-trip", () => {
       assert.ok(t);
       assert.equal(t.id, "AGT-099");
       assert.equal(t.repo, "owner/repo");
+      assert.equal(t.project, "my-project");
       assert.equal(t.linkedGitHub, "https://github.com/owner/repo,with,commas/issues/9");
       assert.deepEqual(t.labels, ["bug", "perf"]);
       assert.equal(t.source.type, "github");
