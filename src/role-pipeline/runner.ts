@@ -22,8 +22,14 @@ import {
   findTicketFileByID,
   isAgtId,
   parseTicket,
+  readAllTickets,
   resolveVault,
 } from "../lib/vault.ts";
+import {
+  prepareAgentWorkspace,
+  StampGateError,
+  type PreparedWorkspace,
+} from "../lib/workspace.ts";
 import { installRolePipelineSlashCommand } from "./install-slash-command.ts";
 
 export interface AssignOptions {
@@ -31,6 +37,12 @@ export interface AssignOptions {
   vault?: string;
   monitoredOrgs?: string[];
   workInline?: boolean;
+  /**
+   * Bypass the stamp-server gate (AC #6 of AGT-050). Falls back to a fresh
+   * `git clone git@github.com:<repo>.git`. Loud and not recommended — the
+   * stamp gate exists to keep agents from pushing direct to GitHub.
+   */
+  noStamp?: boolean;
 }
 
 export async function assignTicket(opts: AssignOptions): Promise<void> {
@@ -71,6 +83,34 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
     );
   }
 
+  // AGT-050: prepare the isolated agent workspace before spawn. For a repo-
+  // bound ticket, this clones from the stamp server (or from GitHub when the
+  // operator explicitly passes --no-stamp) and uses the cloned worktree as
+  // the spawn cwd. Vault-only tickets (no `repo:`) skip workspace prep and
+  // fall back to the vault directory, matching the prior behaviour.
+  let workspace: PreparedWorkspace | null = null;
+  if (ticket.repo) {
+    try {
+      workspace = prepareAgentWorkspace({
+        ticketId: ticket.id,
+        repoSlug: ticket.repo,
+        noStamp: opts.noStamp ?? false,
+        activeTicketIds: collectActiveTicketIds(resolvedVault.path),
+      });
+    } catch (err) {
+      if (err instanceof StampGateError) {
+        process.stderr.write(`${err.message}\n`);
+        process.exit(1);
+      }
+      throw err;
+    }
+    if (opts.noStamp) {
+      process.stderr.write(
+        `oteam assign: --no-stamp set; cloned from ${workspace.originUrl}. The stamp gate is bypassed — verify any push manually.\n`,
+      );
+    }
+  }
+
   // AGT-023: when the ticket carries `project: <id>`, load the project's
   // README + sibling-file index and pass it to claude as an appended system
   // prompt. Lets the agent auto-resolve project-wide design decisions instead
@@ -80,7 +120,7 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
   const kittyPath =
     !opts.workInline && isMacOS() ? findKittyBinary() : null;
   if (!kittyPath) {
-    runInline(claudePath, ticketPath, resolvedVault.path, projectContext);
+    runInline(claudePath, ticketPath, resolvedVault.path, projectContext, workspace);
     return;
   }
 
@@ -91,11 +131,11 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
     process.stderr.write(
       `oteam assign: no kitty socket reachable (preferring "${preferring}"); falling back to inline run.\n`,
     );
-    runInline(claudePath, ticketPath, resolvedVault.path, projectContext);
+    runInline(claudePath, ticketPath, resolvedVault.path, projectContext, workspace);
     return;
   }
 
-  const cwd = dirname(ticketPath);
+  const cwd = workspace?.path ?? dirname(ticketPath);
   const title = `Vault · ${basename(ticketPath)}`;
   const repoBasename = ticket.repo?.split("/").pop() ?? null;
   const repoSlug = ticket.repo
@@ -141,6 +181,7 @@ function runInline(
   ticketPath: string,
   vaultPath: string,
   projectContext: ProjectContextHandle | null,
+  workspace: PreparedWorkspace | null,
 ): void {
   // Spawn claude in the current terminal with the slash command pre-typed,
   // inheriting stdio so the user can interact with the session normally.
@@ -164,10 +205,24 @@ function runInline(
     args,
     {
       stdio: "inherit",
+      cwd: workspace?.path,
       env: { ...process.env, PRODUCT_VAULT_PATH: vaultPath },
     },
   );
   if (r.status != null && r.status !== 0) process.exit(r.status);
+}
+
+function collectActiveTicketIds(vaultPath: string): Set<string> {
+  const ids = new Set<string>();
+  try {
+    for (const t of readAllTickets(vaultPath)) {
+      ids.add(t.id.toLowerCase());
+    }
+  } catch {
+    // Best-effort — a vault read failure should not block the spawn. The
+    // GC sweep skips when the active set is empty/missing.
+  }
+  return ids;
 }
 
 interface ProjectContextHandle {

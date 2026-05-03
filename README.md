@@ -47,6 +47,7 @@ oteam pull <source> <ref>           # ingest external item → tickets/triage/
 oteam pull --project <name> ...     # tag the new ticket with a project
 oteam assign <ticket-or-id>         # drive role pipeline (full path or AGT-NNN)
 oteam assign --inline <path>        # … or run inline in current terminal
+oteam assign --no-stamp <id>        # bypass the stamp gate (not recommended)
 oteam list [--state <state>]        # list active tickets
 oteam list --project <name>         # filter by project frontmatter
 oteam archive <ticket-id>           # move done ticket to archive/YYYY-MM/
@@ -102,6 +103,16 @@ claude --dangerously-skip-permissions --model claude-opus-4-7 "/assign-ticket <p
 …inside a new kitty OS window on macOS, or inline in the calling terminal on `--inline` / non-macOS platforms. The spawned session inherits your full Claude Code environment — global `CLAUDE.md`, MCP servers, hooks, your other slash commands. The role pipeline runs there as the literal `/assign-ticket` slash command.
 
 Requires the `claude` CLI on PATH (https://claude.com/claude-code).
+
+### Spawn-time stamp gate
+
+For repo-bound tickets (`repo:` frontmatter set), `oteam assign` clones an isolated agent worktree from the stamp server before spawning, and points the spawned session's cwd at it. The clone is the gate: success means the repo is registered on the stamp server (`~/.stamp/server.yml` is read for host + port, and the URL is built as `ssh://git@<host>:<port>/srv/git/<basename>.git`); failure exits non-zero before any spawn. The cloned worktree has exactly one remote — `origin → <stamp-url>` — and shares no `.git/objects` with any clone you keep elsewhere on disk. That's by design: a stamp-signed merge made inside the worktree can only be pushed back to stamp, never pushed direct to GitHub by accident.
+
+The trade is a few seconds of SSH clone time per spawn instead of a near-instant `git worktree add`. For agent flows that immediately spend tens of seconds in an LLM thinking phase, the difference is noise.
+
+Pass `--no-stamp` to bypass the gate and clone from `git@github.com:<repo>.git` instead. This is loud (you'll see a stderr line on the spawn) and is **not recommended** — the stamp gate is the safeguard against agents pushing direct to GitHub, so use it only when you've decided the repo is intentionally not stamp-governed (e.g. a public OSS clone, or a one-off scratch repo). Repos that fit this shape need to be told so on every assign; there's no per-repo config to make `--no-stamp` sticky on purpose.
+
+Stale workspaces from prior assigns are GC'd at spawn time: any `/tmp/open-team-issues/agt-N/` directory whose ticket id has no matching ticket in the active vault is `rm -rf`'d before the new clone. The current run's workspace is also `rm -rf`'d before its clone, so re-assigns are hermetic.
 
 ## Config & multiple vaults
 

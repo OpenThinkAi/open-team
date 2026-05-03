@@ -13,7 +13,7 @@ You are working a `product-vault` ticket. The user invoked `oteam assign <path>`
 3. **No commits, no PRs, no Linear.** Vault tickets do not necessarily map to a code repo. Only act on code if the ticket's `repo:` field is set AND the work demands it.
 4. **STOP at every role-handoff boundary.** When your role is done, write a STOP marker (visual banner per Output discipline below) and let the human decide whether to continue.
 5. **3-attempt cap on any failing operation.** If a step fails (e.g., file mv fails, frontmatter parse fails, build/test fails), you get 3 tries before STOPPing.
-6. **Never read or write inside the user's primary checkout.** The user's `~/Development/<repo>` working tree may have uncommitted in-flight work; entangling with it is a sterile-field violation. If the spike or implementation needs to touch repo code, isolate first via `git worktree add` (preferred when the repo is local) or `git clone` (when it isn't) into `/tmp/open-team-issues/<ticket-id-lowercased>/repo`. See Phase 3 Step 0 for the canonical recipe — Phase 4b reuses the same workspace.
+6. **Never read or write inside `$HOME/Development/<repo>`.** That tree may have uncommitted in-flight work; entangling with it is a sterile-field violation. For repo-bound tickets, the `oteam` runner has already prepared an isolated agent worktree at `/tmp/open-team-issues/<ticket-id-lowercased>/repo` and spawned you cd'd into it — that's your only valid working directory. The runner clones from the stamp server by default (or from GitHub when invoked with `--no-stamp`); either way, the worktree is isolated from your primary, so AC-shaped requirements like "primary's `git remote -v` is byte-equal before/after a spawn" are satisfied by construction. If your `$PWD` is not the prepared workspace (e.g. you invoked the slash command by hand outside of `oteam assign`), set up the workspace yourself before reading any repo file — see Phase 3 Step 0.
 
 ## Phase 0 — Read the ticket
 
@@ -63,31 +63,35 @@ Write the comment in this shape:
 
 ## Phase 3 — Engineering agent (state: refined → spike phase)
 
-**Step 0 — Isolate the workspace if you need to read repo code.** If `repo:` is set, OR the AC clearly involves a known code repository (the ticket talks about a specific app, file paths, modules), set up an isolated `git worktree` before reading any files outside the vault. Per Hard rule 6, never read from `~/Development/<repo>` directly — the user's checkout may have uncommitted in-flight work.
+**Step 0 — Workspace is already prepared.** When `oteam assign` spawned you against a repo-bound ticket, it already cloned `/tmp/open-team-issues/<ticket-id-lowercased>/repo` (from the stamp server by default, or from GitHub when invoked with `--no-stamp`) and set your cwd to it. Confirm with `pwd` and `git remote -v`; for stamp-governed repos you should see exactly one remote, `origin`, pointing at `ssh://git@<stamp-host>:<port>/srv/git/<basename>.git`.
+
+Cost trade: a fresh stamp clone adds a few seconds vs. the older `git worktree add` fast path. That's an intentional trade for AC-grade isolation — the agent worktree shares no `.git/objects` and no remotes with your primary, and removing or renaming any remote inside the worktree cannot leak back to your daily flow.
+
+If you invoked `/assign-ticket` by hand (no `oteam assign` wrapper) and the workspace doesn't exist yet, set it up the same way the runner would:
 
 ```sh
 TICKET_ID_LC=$(echo "$TICKET_ID" | tr '[:upper:]' '[:lower:]')
 WORKSPACE="/tmp/open-team-issues/$TICKET_ID_LC"
-# REPO_SLUG is "<owner>/<name>" from `repo:` if set, else inferred from the ticket
-# (e.g. AGT-007 implies mattpardini/agentic-desktop). When inferring, name it
-# explicitly in your spike notes so the human can correct you.
+# REPO_SLUG is "<owner>/<name>" from `repo:` if set, else inferred from the
+# ticket. When inferring, name it explicitly in your spike notes so the human
+# can correct you.
 REPO_BASE=$(basename "$REPO_SLUG")
-PRIMARY="$HOME/Development/$REPO_BASE"
 mkdir -p "$WORKSPACE"
 cd "$WORKSPACE"
 rm -rf repo
-if [ -d "$PRIMARY/.git" ]; then
-    # Fast path: worktree from local checkout (shares object store, no network).
-    git -C "$PRIMARY" fetch origin
-    DEFAULT=$(git -C "$PRIMARY" symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remotes/origin/@@')
-    git -C "$PRIMARY" worktree add "$WORKSPACE/repo" "origin/$DEFAULT"
+SERVER_HOST=$(awk '/^host:/ { print $2 }' "$HOME/.stamp/server.yml" 2>/dev/null)
+SERVER_PORT=$(awk '/^port:/ { print $2 }' "$HOME/.stamp/server.yml" 2>/dev/null)
+if [ -n "$SERVER_HOST" ] && [ -n "$SERVER_PORT" ] && \
+   git clone "ssh://git@${SERVER_HOST}:${SERVER_PORT}/srv/git/${REPO_BASE}.git" repo 2>/dev/null; then
+    : # cloned from stamp; origin points at the stamp URL
 else
-    git clone "git@github.com:$REPO_SLUG.git" repo
+    # No stamp config or repo not on stamp server — fall back to GitHub.
+    git clone "git@github.com:${REPO_SLUG}.git" repo
 fi
 cd repo
 ```
 
-The worktree at `$WORKSPACE/repo` is your only valid working directory for the rest of this run. Read `CLAUDE.md`, `AGENTS.md`, `README.md` from here. If you find yourself running `cd ~/Development/...`, stop — that's the bug Hard rule 6 exists to prevent.
+Read `CLAUDE.md`, `AGENTS.md`, `README.md` from inside the worktree. If you find yourself running `cd ~/Development/...`, stop — that's the bug Hard rule 6 exists to prevent.
 
 If the spike is purely vault-shaped (no repo code involved), skip this step.
 
@@ -142,34 +146,21 @@ Edit files in the vault or wherever the spike plan named. No clone, no branch, n
 
 This subsumes the GitHub-source pipeline. Steps:
 
-**1. Workspace.** Reuse the isolated worktree from Phase 3 Step 0 if it exists:
+**1. Workspace.** Reuse the isolated worktree the runner already prepared in Phase 3 Step 0:
 
 ```sh
 WORKSPACE="/tmp/open-team-issues/$(echo "$TICKET_ID" | tr '[:upper:]' '[:lower:]')"
 cd "$WORKSPACE/repo"
 ```
 
-If you skipped Phase 3 Step 0 (vault-only spike that turned out to need code changes), set the worktree up now per the Phase 3 Step 0 recipe — same rule applies: worktree from local checkout if available, clone fresh if not. Per Hard rule 6, never `cd` into the user's primary checkout.
+If you skipped Phase 3 Step 0 (vault-only spike that turned out to need code changes), set the worktree up now per the Phase 3 Step 0 recipe. Per Hard rule 6, never `cd` into `$HOME/Development/<repo>`.
 
 Read `CLAUDE.md`, `AGENTS.md`, `README.md` at the repo root if present.
 
-**2. Stamp server-gated rewire.** If `.stamp/` exists AND the repo is in `stamp server-repos list`, rewire `origin` to the Railway server (matching hand-cloned layout):
+**2. Verify the worktree shape.** Run `git remote -v` and confirm one of two shapes:
 
-```sh
-if [ -d .stamp ] && command -v stamp >/dev/null 2>&1; then
-    REPO_BASENAME=$(basename "<repo>")
-    if stamp server-repos list 2>/dev/null | grep -Fxq -- "$REPO_BASENAME"; then
-        SERVER_HOST=$(awk '/^host:/ { print $2 }' "$HOME/.stamp/server.yml")
-        SERVER_PORT=$(awk '/^port:/ { print $2 }' "$HOME/.stamp/server.yml")
-        [ -n "$SERVER_HOST" ] && [ -n "$SERVER_PORT" ] || { echo "STOP: stamp server-repos lists $REPO_BASENAME but ~/.stamp/server.yml is missing host/port"; exit 1; }
-        STAMP_URL="ssh://git@${SERVER_HOST}:${SERVER_PORT}/srv/git/${REPO_BASENAME}.git"
-        git remote rename origin github
-        git remote add origin "$STAMP_URL"
-        git fetch origin
-        git remote set-head origin -a
-    fi
-fi
-```
+- **Stamp-governed (default).** Exactly one remote, `origin`, pointing at `ssh://git@<stamp-host>:<port>/srv/git/<basename>.git`. The runner clones with that shape on purpose; no rename / re-add is required, and adding a `github` remote here would defeat the AGT-050 invariant. Continue to Step 3 and use the stamp-protected branch (5a) at the end of Step 5.
+- **`--no-stamp` run.** Exactly one remote, `origin`, pointing at `git@github.com:<owner>/<repo>.git`. Continue to Step 3 and route through the plain-GitHub branch (5b) at the end of Step 5 — `git push origin <feature>` + `gh pr create`. The stamp commands (`stamp review`, `stamp merge`, `stamp push`) must not be invoked in this branch even if `.stamp/` exists in the worktree, because there's nowhere to push the stamp-signed merge.
 
 **3. Determine base branch + cut feature branch.**
 
@@ -206,8 +197,13 @@ When tests pass:
 ```sh
 git add -A
 COMMIT_BODY="Refs <ticket-id>"
-# When source.type=github, also reference the GH issue so the merge auto-closes it.
-if [ "<source.type>" = "github" ]; then
+# Plain-GitHub path only: append a `Fixes <gh-issue-url>` trailer so the
+# eventual GH merge auto-closes the issue. The stamp-governed path skips
+# this trailer — those worktrees have no github remote, the merge gets
+# pushed to the stamp server, and GH never sees a commit that would
+# trigger auto-close. QA Phase 5 closes the GH issue explicitly via
+# `gh issue close`, so behaviour is preserved either way.
+if [ "<source.type>" = "github" ] && [ ! -d .stamp ]; then
     COMMIT_BODY="$COMMIT_BODY"$'\n'"Fixes <linked-github URL>"
 fi
 git commit -m "<one-line summary>

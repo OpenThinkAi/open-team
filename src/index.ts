@@ -67,15 +67,23 @@ program
     "Run the role pipeline in the current terminal instead of spawning kitty",
   )
   .option("--vault <name-or-path>", "Use a specific registered vault")
+  .option(
+    "--no-stamp",
+    "Skip the stamp-server gate; clone the agent worktree from GitHub instead. Not recommended — bypasses the safeguard against agents pushing direct to GitHub. Use only when the repo is intentionally not stamp-governed.",
+  )
   .action(
     async (
       ticketPath: string,
-      opts: { inline?: boolean; vault?: string },
+      opts: { inline?: boolean; vault?: string; stamp?: boolean },
     ) => {
+      // commander's `--no-stamp` flag flips `opts.stamp` to `false` (default
+      // is `true` because the long form is `--no-stamp`). Translate to the
+      // explicit positive `noStamp` field that `assignTicket` consumes.
       await assignTicket({
         ticketPath,
         workInline: opts.inline,
         vault: opts.vault,
+        noStamp: opts.stamp === false,
       });
     },
   );
