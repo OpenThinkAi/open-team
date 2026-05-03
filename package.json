@@ -1,5 +1,5 @@
 {
-  "name": "open-team",
+  "name": "@openthinkai/team",
   "version": "0.0.1",
   "type": "module",
   "description": "Source-agnostic vault-driven role pipeline for spawning Claude agents against tickets",

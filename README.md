@@ -7,7 +7,7 @@ Source-agnostic vault-driven role pipeline for spawning Claude agents against ti
 Requires Node `>=22.5.0`.
 
 ```sh
-npm install -g open-team   # once published; see "Status" below
+npm install -g @openthinkai/team   # once published; see "Status" below
 ```
 
 Until then, install from a local clone:
@@ -148,7 +148,7 @@ agentic-desktop now keeps only the PR-side modules (`GitHubPRs`, `AIReview*`, `C
 
 Migration steps:
 
-1. `npm install -g open-team` (or `npm link` from a local clone).
+1. `npm install -g @openthinkai/team` (or `npm link` from a local clone).
 2. Either set `PRODUCT_VAULT_PATH` if your vault isn't at `~/Documents/product-vault`, or register it via `oteam config vault add <path>` (see [Config & multiple vaults](#config--multiple-vaults)).
 3. Optionally set `OTEAM_MONITORED_ORGS=Org1,Org2` to route those repos' tickets to the "work" kitty socket (preserves the personal/work split agentic-desktop had).
 4. Delete `~/Library/Application Support/AgenticDesktop/vault-assignments.json` (panel-indicator state, no longer used).
