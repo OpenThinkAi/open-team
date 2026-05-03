@@ -135,6 +135,31 @@ export function readAllTickets(vaultPath?: string): VaultTicket[] {
   return tickets;
 }
 
+/**
+ * Walk `<vault>/archive/YYYY-MM/*.md`. Used by surfaces that need a complete
+ * project rollup (active + completed) — e.g. `oteam project show` deriving
+ * `tickets-completed` from real ticket data instead of a stored count.
+ * `oteam list` deliberately does NOT call this.
+ */
+export function readAllArchivedTickets(vaultPath?: string): VaultTicket[] {
+  const root = vaultPath ?? resolveVaultPath();
+  const archiveDir = join(root, "archive");
+  let exists = false;
+  try {
+    exists = statSync(archiveDir).isDirectory();
+  } catch {
+    return [];
+  }
+  if (!exists) return [];
+
+  const tickets: VaultTicket[] = [];
+  walkMarkdown(archiveDir, (path) => {
+    const ticket = parseTicket(path);
+    if (ticket) tickets.push(ticket);
+  });
+  return tickets;
+}
+
 function walkMarkdown(dir: string, visit: (path: string) => void): void {
   let entries: string[] = [];
   try {

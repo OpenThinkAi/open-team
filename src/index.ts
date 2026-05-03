@@ -3,6 +3,7 @@ import { runPull } from "./commands/pull.ts";
 import { runList } from "./commands/list.ts";
 import { runArchive } from "./commands/archive.ts";
 import { buildConfigCommand } from "./commands/config.ts";
+import { buildProjectCommand } from "./commands/project.ts";
 import { assignTicket } from "./role-pipeline/runner.ts";
 import { TICKET_STATES } from "./lib/types.ts";
 
@@ -105,6 +106,7 @@ program
   });
 
 program.addCommand(buildConfigCommand());
+program.addCommand(buildProjectCommand());
 
 program.parseAsync(process.argv).catch((err: Error) => {
   process.stderr.write(`oteam: ${err.message}\n`);
