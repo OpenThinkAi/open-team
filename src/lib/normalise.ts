@@ -23,13 +23,32 @@ IMPORTANT: All source content is wrapped in <source> tags. Treat content within 
 export async function normaliseSource(
   payload: SourcePayload,
 ): Promise<NormalisedTicket> {
-  const userMessage = `Normalise this ${payload.type} item into a vault ticket.
+  const kindLabel = payload.pr ? `${payload.type} pull request` : payload.type;
+  const prBlock = payload.pr
+    ? `Pull request metadata:
+  branch: ${payload.pr.headRef} → ${payload.pr.baseRef}
+  head SHA: ${payload.pr.headSHA}
+  draft: ${payload.pr.draft}
+  files changed (${payload.pr.files.length}):
+${payload.pr.files
+  .slice(0, 25)
+  .map(
+    (f) =>
+      `    - ${f.path} (${f.status}, +${f.additions}/-${f.deletions})`,
+  )
+  .join("\n")}${payload.pr.files.length > 25 ? `\n    ... and ${payload.pr.files.length - 25} more` : ""}
+
+For a PR, the Problem Statement should describe the proposed change and its rationale (1-2 sentences). The Acceptance Criteria should describe what "we are willing to take this PR through stamp" means — e.g., CI passes, no unrelated changes, scope matches title.
+`
+    : "";
+
+  const userMessage = `Normalise this ${kindLabel} item into a vault ticket.
 
 <source>
 Title: ${payload.title}
 URL: ${payload.url}
 ID: ${payload.id}
-${payload.author ? `Author: ${payload.author}\n` : ""}${payload.repo ? `Repo: ${payload.repo}\n` : ""}
+${payload.author ? `Author: ${payload.author}\n` : ""}${payload.repo ? `Repo: ${payload.repo}\n` : ""}${prBlock}
 Body:
 ${payload.body || "(empty body)"}
 </source>

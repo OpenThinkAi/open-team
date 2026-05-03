@@ -283,3 +283,159 @@ describe("runList --project", () => {
     }
   });
 });
+
+describe("runList — extended filters", () => {
+  function seedVault(): { root: string; cleanup: () => void } {
+    const root = mkdtempSync(join(tmpdir(), "vault-list-"));
+    mkdirSync(join(root, "tickets", "triage"), { recursive: true });
+    mkdirSync(join(root, "tickets", "qa"), { recursive: true });
+    mkdirSync(join(root, "archive", "2026-04"), { recursive: true });
+
+    writeFileSync(
+      join(root, "tickets", "triage", "AGT-010-stamp.md"),
+      SAMPLE
+        .replace("AGT-042", "AGT-010")
+        .replace('"Sample ticket title"', '"discuss: STAMP_REQUIRE_HUMAN_MERGE default"')
+        .replace("project: open-team", "project: stamp-cli-hardening")
+        .replace("priority: high", "priority: high")
+        .replace("labels: [foo, bar]", "labels: [security, harden]"),
+    );
+    writeFileSync(
+      join(root, "tickets", "qa", "AGT-011-other.md"),
+      SAMPLE
+        .replace("AGT-042", "AGT-011")
+        .replace("state: refined", "state: qa")
+        .replace('"Sample ticket title"', '"unrelated qa ticket"')
+        .replace("repo: OpenThinkAi/open-team", "repo: OpenThinkAi/think")
+        .replace("priority: high", "priority: medium")
+        .replace("labels: [foo, bar]", "labels: [bug]"),
+    );
+    writeFileSync(
+      join(root, "archive", "2026-04", "AGT-009-old.md"),
+      SAMPLE
+        .replace("AGT-042", "AGT-009")
+        .replace("state: refined", "state: done")
+        .replace('"Sample ticket title"', '"old archived stamp work"')
+        .replace("project: open-team", "project: stamp-cli-hardening"),
+    );
+    return { root, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  }
+
+  it("--repo is case-insensitive", () => {
+    const { root, cleanup } = seedVault();
+    try {
+      const out = runList({ vault: root, repo: "openthinkai/OPEN-team" });
+      assert.match(out, /AGT-010/);
+      assert.doesNotMatch(out, /AGT-011/);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("--project is case-insensitive", () => {
+    const { root, cleanup } = seedVault();
+    try {
+      const out = runList({ vault: root, project: "STAMP-CLI-Hardening" });
+      assert.match(out, /AGT-010/);
+      assert.doesNotMatch(out, /AGT-011/);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("--team filters by team frontmatter", () => {
+    const { root, cleanup } = seedVault();
+    try {
+      const out = runList({ vault: root, team: "ENGINEERING" });
+      assert.match(out, /AGT-010/);
+      assert.match(out, /AGT-011/);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("--priority and --label can stack", () => {
+    const { root, cleanup } = seedVault();
+    try {
+      const out = runList({
+        vault: root,
+        priority: "High",
+        label: ["security"],
+      });
+      assert.match(out, /AGT-010/);
+      assert.doesNotMatch(out, /AGT-011/);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("--label requires ALL provided labels (AND match)", () => {
+    const { root, cleanup } = seedVault();
+    try {
+      const both = runList({ vault: root, label: ["security", "harden"] });
+      assert.match(both, /AGT-010/);
+      const missing = runList({
+        vault: root,
+        label: ["security", "nope"],
+      });
+      assert.equal(missing, "(no tickets)");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("--match does case-insensitive title substring", () => {
+    const { root, cleanup } = seedVault();
+    try {
+      const out = runList({ vault: root, match: "STAMP" });
+      assert.match(out, /AGT-010/);
+      assert.doesNotMatch(out, /AGT-011/);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("--grep matches the ticket body", () => {
+    const { root, cleanup } = seedVault();
+    try {
+      const out = runList({ vault: root, grep: "BODY HERE" });
+      assert.match(out, /AGT-010/);
+      assert.match(out, /AGT-011/);
+      const none = runList({ vault: root, grep: "no-such-string-anywhere" });
+      assert.equal(none, "(no tickets)");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("--source filters by source.type", () => {
+    const { root, cleanup } = seedVault();
+    try {
+      const github = runList({ vault: root, source: "GITHUB" });
+      assert.match(github, /AGT-010/);
+      const manual = runList({ vault: root, source: "manual" });
+      assert.equal(manual, "(no tickets)");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("--include-archived also includes archive/ and done state", () => {
+    const { root, cleanup } = seedVault();
+    try {
+      const noArchive = runList({ vault: root, project: "stamp-cli-hardening" });
+      assert.match(noArchive, /AGT-010/);
+      assert.doesNotMatch(noArchive, /AGT-009/);
+
+      const withArchive = runList({
+        vault: root,
+        project: "stamp-cli-hardening",
+        includeArchived: true,
+      });
+      assert.match(withArchive, /AGT-010/);
+      assert.match(withArchive, /AGT-009/);
+    } finally {
+      cleanup();
+    }
+  });
+});

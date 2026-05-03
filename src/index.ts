@@ -3,7 +3,9 @@ import { runPull } from "./commands/pull.ts";
 import { runList } from "./commands/list.ts";
 import { runArchive } from "./commands/archive.ts";
 import { buildConfigCommand } from "./commands/config.ts";
+import { buildInitCommand } from "./commands/init.ts";
 import { buildProjectCommand } from "./commands/project.ts";
+import { buildTicketCommand } from "./commands/ticket.ts";
 import { assignTicket } from "./role-pipeline/runner.ts";
 import { TICKET_STATES } from "./lib/types.ts";
 
@@ -90,19 +92,55 @@ program
 
 program
   .command("list")
-  .description("List active tickets")
+  .description("List tickets in the vault (filter by structured frontmatter or grep)")
   .option("--state <state>", "Filter by ticket state (triage|refined|...)")
-  .option("--project <name>", "Filter by project name")
+  .option("--project <name>", "Filter by project name (case-insensitive)")
+  .option("--repo <slug>", "Filter by repo frontmatter (case-insensitive)")
+  .option("--team <team>", "Filter by team (case-insensitive)")
+  .option("--priority <priority>", "Filter by priority (case-insensitive)")
+  .option("--source <type>", "Filter by source.type (github|manual|...)")
+  .option(
+    "--label <label>",
+    "Filter by label (case-insensitive; repeatable, all must match)",
+    (value: string, prev: string[] = []) => [...prev, value],
+    [] as string[],
+  )
+  .option(
+    "--match <pattern>",
+    "Case-insensitive substring match against the title",
+  )
+  .option(
+    "--grep <pattern>",
+    "Case-insensitive substring match against the ticket body (reads files)",
+  )
+  .option(
+    "--include-archived",
+    "Also search <vault>/archive/ (excluded by default)",
+  )
   .option("--vault <name-or-path>", "Use a specific registered vault")
-  .action((opts: { state?: string; project?: string; vault?: string }) => {
-    if (opts.state && !(TICKET_STATES as readonly string[]).includes(opts.state)) {
-      process.stderr.write(
-        `oteam list: unknown state "${opts.state}" — supported: ${TICKET_STATES.join(", ")}\n`,
-      );
-      process.exit(2);
-    }
-    process.stdout.write(runList(opts) + "\n");
-  });
+  .action(
+    (opts: {
+      state?: string;
+      project?: string;
+      repo?: string;
+      team?: string;
+      priority?: string;
+      source?: string;
+      label: string[];
+      match?: string;
+      grep?: string;
+      includeArchived?: boolean;
+      vault?: string;
+    }) => {
+      if (opts.state && !(TICKET_STATES as readonly string[]).includes(opts.state)) {
+        process.stderr.write(
+          `oteam list: unknown state "${opts.state}" — supported: ${TICKET_STATES.join(", ")}\n`,
+        );
+        process.exit(2);
+      }
+      process.stdout.write(runList(opts) + "\n");
+    },
+  );
 
 program
   .command("archive <ticket-id>")
@@ -114,7 +152,9 @@ program
   });
 
 program.addCommand(buildConfigCommand());
+program.addCommand(buildInitCommand());
 program.addCommand(buildProjectCommand());
+program.addCommand(buildTicketCommand());
 
 program.parseAsync(process.argv).catch((err: Error) => {
   process.stderr.write(`oteam: ${err.message}\n`);

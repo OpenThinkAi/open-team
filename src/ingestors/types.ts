@@ -7,6 +7,25 @@ export interface SourcePayload {
   author?: string;
   repo?: string;
   metadata?: Record<string, unknown>;
+  pr?: PRMetadata;
+}
+
+export interface PRFileChange {
+  path: string;
+  status: string;
+  additions: number;
+  deletions: number;
+}
+
+export interface PRMetadata {
+  headRef: string;
+  baseRef: string;
+  headSHA: string;
+  baseSHA: string;
+  draft: boolean;
+  // GitHub returns `null` for `mergeable` while it computes the merge result.
+  mergeable: boolean | null;
+  files: PRFileChange[];
 }
 
 export interface NormalisedTicket {
