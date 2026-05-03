@@ -15,6 +15,7 @@ import {
   readAllTickets,
   resolveVault,
 } from "../src/lib/vault.ts";
+import { runList } from "../src/commands/list.ts";
 
 const SAMPLE = `---
 id: AGT-042
@@ -23,6 +24,7 @@ state: refined
 team: engineering
 created: 2026-04-30
 updated: 2026-05-01
+project: open-team
 repo: OpenThinkAi/open-team
 linked-github: https://github.com/x/y/issues/9
 linked-pr:
@@ -49,6 +51,7 @@ describe("parseTicket", () => {
       assert.equal(t.title, "Sample ticket title");
       assert.equal(t.state, "refined");
       assert.equal(t.team, "engineering");
+      assert.equal(t.project, "open-team");
       assert.equal(t.repo, "OpenThinkAi/open-team");
       assert.equal(t.linkedGitHub, "https://github.com/x/y/issues/9");
       assert.equal(t.linkedPR, null);
@@ -249,6 +252,32 @@ describe("readAllTickets", () => {
       assert.equal(tickets.length, 2);
       const ids = tickets.map((t) => t.id).sort();
       assert.deepEqual(ids, ["AGT-001", "AGT-002"]);
+    } finally {
+      rmSync(root, { recursive: true });
+    }
+  });
+});
+
+describe("runList --project", () => {
+  it("filters by project frontmatter", () => {
+    const root = mkdtempSync(join(tmpdir(), "vault-"));
+    try {
+      mkdirSync(join(root, "tickets", "triage"), { recursive: true });
+      writeFileSync(
+        join(root, "tickets", "triage", "AGT-001-a.md"),
+        SAMPLE.replace("AGT-042", "AGT-001"),
+      );
+      writeFileSync(
+        join(root, "tickets", "triage", "AGT-002-b.md"),
+        SAMPLE
+          .replace("AGT-042", "AGT-002")
+          .replace("project: open-team", "project: candlesight"),
+      );
+      const out = runList({ vault: root, project: "open-team" });
+      assert.match(out, /AGT-001/);
+      assert.doesNotMatch(out, /AGT-002/);
+      const empty = runList({ vault: root, project: "ghost" });
+      assert.equal(empty, "(no tickets)");
     } finally {
       rmSync(root, { recursive: true });
     }

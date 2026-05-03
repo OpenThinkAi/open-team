@@ -6,6 +6,7 @@ export interface RenderInput {
   normalised: NormalisedTicket;
   todayISO: string;
   fetchedAtISO: string;
+  project?: string | null;
 }
 
 export function renderTicket(input: RenderInput): string {
@@ -26,6 +27,7 @@ export function renderTicket(input: RenderInput): string {
     "team: product",
     `created: ${todayISO}`,
     `updated: ${todayISO}`,
+    `project: ${input.project ?? ""}`,
     `repo: ${payload.repo ?? ""}`,
     `linked-github: ${payload.type === "github" ? payload.url : ""}`,
     "linked-pr: ",

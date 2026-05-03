@@ -20,6 +20,7 @@ export interface VaultTicket {
   team: string | null;
   createdAt: Date;
   updatedAt: Date;
+  project: string | null;
   repo: string | null;
   linkedGitHub: string | null;
   linkedPR: string | null;

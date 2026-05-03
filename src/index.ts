@@ -18,9 +18,14 @@ program
 async function handlePull(
   source: string,
   ref: string,
-  opts: { vault?: string },
+  opts: { vault?: string; project?: string },
 ): Promise<void> {
-  const result = await runPull({ source, ref, vault: opts.vault });
+  const result = await runPull({
+    source,
+    ref,
+    vault: opts.vault,
+    project: opts.project,
+  });
   const verb = result.reused ? "Reused existing" : "Filed";
   process.stdout.write(`✅ ${verb} ${result.ticketID}\n   ${result.path}\n`);
 }
@@ -31,6 +36,10 @@ program
     "Ingest an external item into the vault as a triage ticket (sources: github)",
   )
   .option("--vault <name-or-path>", "Use a specific registered vault")
+  .option(
+    "--project <name>",
+    "Tag the ticket with a project name (defaults to the source repo's bare name)",
+  )
   .action(handlePull);
 
 // `ingest` is the literal verb AC #2 enumerates; `pull` is the user-facing
@@ -41,6 +50,10 @@ program
   .command("ingest <source> <ref>", { hidden: true })
   .description("Hidden alias for `pull`.")
   .option("--vault <name-or-path>", "Use a specific registered vault")
+  .option(
+    "--project <name>",
+    "Tag the ticket with a project name (defaults to the source repo's bare name)",
+  )
   .action(handlePull);
 
 program
@@ -70,8 +83,9 @@ program
   .command("list")
   .description("List active tickets")
   .option("--state <state>", "Filter by ticket state (triage|refined|...)")
+  .option("--project <name>", "Filter by project name")
   .option("--vault <name-or-path>", "Use a specific registered vault")
-  .action((opts: { state?: string; vault?: string }) => {
+  .action((opts: { state?: string; project?: string; vault?: string }) => {
     if (opts.state && !(TICKET_STATES as readonly string[]).includes(opts.state)) {
       process.stderr.write(
         `oteam list: unknown state "${opts.state}" — supported: ${TICKET_STATES.join(", ")}\n`,

@@ -186,6 +186,7 @@ export function parseTicket(path: string): VaultTicket | null {
     team: nonEmpty(frontmatter.team),
     createdAt: isNaN(created.getTime()) ? new Date() : created,
     updatedAt: isNaN(updated.getTime()) ? created : updated,
+    project: nonEmpty(frontmatter.project),
     repo: nonEmpty(frontmatter.repo),
     linkedGitHub: nonEmpty(frontmatter["linked-github"]),
     linkedPR: nonEmpty(frontmatter["linked-pr"]),

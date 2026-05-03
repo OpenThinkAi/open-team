@@ -44,15 +44,33 @@ For the simplest single-vault setup, leave `~/Documents/product-vault` in place 
 
 ```sh
 oteam pull <source> <ref>           # ingest external item → tickets/triage/
+oteam pull --project <name> ...     # tag the new ticket with a project
 oteam assign <ticket-or-id>         # drive role pipeline (full path or AGT-NNN)
 oteam assign --inline <path>        # … or run inline in current terminal
 oteam list [--state <state>]        # list active tickets
+oteam list --project <name>         # filter by project frontmatter
 oteam archive <ticket-id>           # move done ticket to archive/YYYY-MM/
 oteam config vault add <path>       # register a vault under a name
 oteam config vault list             # show registered vaults + default
 ```
 
 Most commands accept `--vault <name-or-path>` to operate on a specific vault.
+
+### Tagging tickets by project
+
+Tickets carry an optional `project:` frontmatter field. It's a free-form
+grouping label — distinct from `repo:` (which is the source-of-truth slug like
+`owner/repo`). Use it to slice work that spans multiple repos, or to give a
+human-readable name to a single repo's tickets.
+
+- `oteam pull github owner/foo#42` auto-tags the ticket with `project: foo`
+  (the bare repo name).
+- `oteam pull github owner/foo#42 --project candlesight` overrides the
+  default — useful when the repo name and the project name diverge.
+- `oteam list --project candlesight` returns just that project's active
+  tickets. Combine with `--state` to narrow further.
+- For tickets filed by hand or via `/file-ticket`, set `project:` directly in
+  the frontmatter; nothing else needs to change.
 
 Sources currently implemented: `github` (refs: `owner/repo#NN` or full issue URL). Linear/Jira/Notion ingestors land as additional files in `src/ingestors/`.
 

@@ -15,6 +15,7 @@ export interface PullOptions {
   source: string;
   ref: string;
   vault?: string;
+  project?: string;
 }
 
 export interface PullResult {
@@ -59,7 +60,19 @@ export async function runPull(opts: PullOptions): Promise<PullResult> {
     normalised,
     todayISO: todayISODate(),
     fetchedAtISO: nowISOTimestamp(),
+    project: opts.project ?? deriveProject(payload.repo),
   });
   writeFileSync(target, body);
   return { path: target, reused: false, ticketID: id };
+}
+
+// Default project = bare repo name (e.g. owner/foo-bar -> foo-bar). The
+// actual repo is preserved verbatim in `repo:`; this is just a coarse
+// grouping label so `oteam list --project foo-bar` works without config.
+// Pass --project to override when the repo name and the project name diverge.
+function deriveProject(repoSlug: string | undefined): string | null {
+  if (!repoSlug) return null;
+  const slash = repoSlug.lastIndexOf("/");
+  const bare = slash >= 0 ? repoSlug.slice(slash + 1) : repoSlug;
+  return bare.length > 0 ? bare : null;
 }
