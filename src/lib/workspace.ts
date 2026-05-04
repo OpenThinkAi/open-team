@@ -1,7 +1,10 @@
 import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { basename, join } from "node:path";
-import { buildGithubUrl } from "./stamp.ts";
+
+function buildGithubUrl(repoSlug: string): string {
+  return `git@github.com:${repoSlug}.git`;
+}
 
 /**
  * Lives at `/tmp/open-team-issues/`. Every per-ticket workspace gets a
@@ -180,8 +183,10 @@ export function prepareAgentWorkspace(
 }
 
 function buildStampCloneUrl(host: string, repoBasename: string): string {
-  const trimmed = host.replace(/\/+$/, "");
-  return `${trimmed}/srv/git/${repoBasename}.git`;
+  // `host` is the already-normalised value from oteam config — slash
+  // stripping happens once on read in config.ts. Building the URL here is
+  // pure concatenation.
+  return `${host}/srv/git/${repoBasename}.git`;
 }
 
 function stampGateReason(r: CloneResult): string {

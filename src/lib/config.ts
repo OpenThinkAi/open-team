@@ -203,7 +203,7 @@ function normaliseStamp(value: unknown): StampConfig | null {
 }
 
 function stripTrailingSlash(s: string): string {
-  return s.endsWith("/") ? s.replace(/\/+$/, "") : s;
+  return s.replace(/\/+$/, "");
 }
 
 export function getStampConfig(): StampConfig | null {
@@ -240,6 +240,28 @@ export function setStampEnforce(enforce: boolean): StampConfig {
     host: config.stamp?.host ?? "",
     enforce,
   };
+  config.stamp = next;
+  writeConfig(config);
+  return next;
+}
+
+/**
+ * Atomic version of setStampHost+setStampEnforce — used by the init prompt
+ * so a host+enforce update lands as a single config write rather than two
+ * read-modify-write cycles.
+ */
+export function setStamp(input: { host: string; enforce: boolean }): StampConfig {
+  const trimmed = input.host.trim();
+  if (trimmed.length === 0) {
+    throw new Error("stamp host cannot be empty — pass a value like ssh://git@host:port");
+  }
+  const next: StampConfig = {
+    host: stripTrailingSlash(trimmed),
+    enforce: input.enforce,
+  };
+  // The G3 guard collapses to "host non-empty" here; the trim above has
+  // already enforced that. No additional check needed.
+  const config = readConfig();
   config.stamp = next;
   writeConfig(config);
   return next;

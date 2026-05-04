@@ -41,17 +41,25 @@ function recordCloneRunner(
   };
 }
 
-function withFakeStampHome(host: string, port: number): string {
-  // Kept for parity with the prior shape — workspace prep now ignores
-  // ~/.stamp/server.yml entirely (AGT-096 AC #8), but the helper still seeds
-  // a fake $HOME so ./HOME-aware code paths under test see a clean slate.
-  const fakeHome = mkdtempSync(join(tmpdir(), "stamp-home-"));
+function withFakeHome(): string {
+  // workspace prep no longer reads anything under $HOME (AGT-096 AC #8);
+  // we still need a writable, empty HOME so `existsSync(... 'Development')`
+  // smoke-checks have a known-clean baseline.
+  const fakeHome = mkdtempSync(join(tmpdir(), "oteam-home-"));
+  process.env.HOME = fakeHome;
+  return fakeHome;
+}
+
+function withTrapServerYml(host: string, port: number): string {
+  // The trap test asserts that workspace.ts ignores ~/.stamp/server.yml
+  // even when one exists with a deliberately wrong host. Used only by that
+  // single test — anywhere else, prefer `withFakeHome()`.
+  const fakeHome = withFakeHome();
   mkdirSync(join(fakeHome, ".stamp"), { recursive: true });
   writeFileSync(
     join(fakeHome, ".stamp", "server.yml"),
     `host: ${host}\nport: ${port}\n`,
   );
-  process.env.HOME = fakeHome;
   return fakeHome;
 }
 
@@ -73,7 +81,7 @@ describe("prepareAgentWorkspace", () => {
   });
 
   it("mode='stamp' clones from <stampHost>/srv/git/<basename>.git on success", () => {
-    fakeHome = withFakeStampHome("stamp.example.com", 22000);
+    fakeHome = withFakeHome();
     const calls: FakeCloneCall[] = [];
     const out = prepareAgentWorkspace({
       ticketId: "AGT-001",
@@ -104,7 +112,7 @@ describe("prepareAgentWorkspace", () => {
     // runner asserts on the URL it received: if workspace.ts ever fell back
     // to reading ~/.stamp/server.yml, this would clone from "trap.invalid"
     // instead of stampHost.
-    fakeHome = withFakeStampHome("trap.invalid", 99999);
+    fakeHome = withTrapServerYml("trap.invalid", 99999);
     const calls: FakeCloneCall[] = [];
     prepareAgentWorkspace({
       ticketId: "AGT-001",
@@ -123,7 +131,7 @@ describe("prepareAgentWorkspace", () => {
   });
 
   it("mode='stamp' throws when stampHost is missing/empty (G3 defence)", () => {
-    fakeHome = withFakeStampHome("stamp.example.com", 22000);
+    fakeHome = withFakeHome();
     assert.throws(
       () =>
         prepareAgentWorkspace({
@@ -150,7 +158,7 @@ describe("prepareAgentWorkspace", () => {
   });
 
   it("mode='stamp' throws StampGateError when the clone fails", () => {
-    fakeHome = withFakeStampHome("stamp.example.com", 22000);
+    fakeHome = withFakeHome();
     const calls: FakeCloneCall[] = [];
     let caught: unknown;
     try {
@@ -195,7 +203,7 @@ describe("prepareAgentWorkspace", () => {
   });
 
   it("rm -rf's a prior workspace before re-cloning (hermetic re-runs)", () => {
-    fakeHome = withFakeStampHome("stamp.example.com", 22000);
+    fakeHome = withFakeHome();
     const ticketDir = join(rootDir, "agt-005");
     mkdirSync(join(ticketDir, "repo"), { recursive: true });
     writeFileSync(join(ticketDir, "repo", "stale.txt"), "from a prior run\n");
@@ -222,7 +230,7 @@ describe("prepareAgentWorkspace", () => {
   });
 
   it("never touches $HOME/Development (AC #4 byte-equal smoke)", () => {
-    fakeHome = withFakeStampHome("stamp.example.com", 22000);
+    fakeHome = withFakeHome();
     prepareAgentWorkspace({
       ticketId: "AGT-006",
       repoSlug: "OpenThinkAi/x",
@@ -239,7 +247,7 @@ describe("prepareAgentWorkspace", () => {
   });
 
   it("runs the GC sweep when activeTicketIds is provided", () => {
-    fakeHome = withFakeStampHome("stamp.example.com", 22000);
+    fakeHome = withFakeHome();
     // Seed two stale workspaces and one matching the active set.
     mkdirSync(join(rootDir, "agt-013", "repo"), { recursive: true });
     mkdirSync(join(rootDir, "agt-014", "repo"), { recursive: true });

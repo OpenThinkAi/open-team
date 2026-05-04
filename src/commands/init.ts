@@ -4,11 +4,9 @@ import { resolve, join } from "node:path";
 import readline from "node:readline";
 import {
   addVault,
-  clearStamp,
   getStampConfig,
   listVaults,
-  setStampEnforce,
-  setStampHost,
+  setStamp,
   type StampConfig,
 } from "../lib/config.ts";
 import {
@@ -290,15 +288,11 @@ async function runStampStep(opts: RunInitOptions): Promise<StampInitOutcome> {
     return { action: "unchanged", stamp: existing };
   }
 
-  // Use the helpers so the same validation (including the G3 guard for
-  // "enforce on with no host") fires whether the value comes from the
-  // prompt or a CLI sub-command later.
-  const hostResult = setStampHost(nextHost);
-  if (enforce !== hostResult.enforce) {
-    const enforceResult = setStampEnforce(enforce);
-    return { action: "set", stamp: enforceResult };
-  }
-  return { action: "set", stamp: hostResult };
+  // Single config write — `setStamp` validates host non-empty, which
+  // satisfies the G3 guard ("enforce on with no host" can't happen because
+  // both fields are written together).
+  const result = setStamp({ host: nextHost, enforce });
+  return { action: "set", stamp: result };
 }
 
 function stampLine(outcome: StampInitOutcome): string | null {
