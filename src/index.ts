@@ -71,7 +71,7 @@ program
   .option("--vault <name-or-path>", "Use a specific registered vault")
   .option(
     "--no-stamp",
-    "Skip the stamp-server gate; clone the agent worktree from GitHub instead. Not recommended — bypasses the safeguard against agents pushing direct to GitHub. Use only when the repo is intentionally not stamp-governed.",
+    "Force a github clone for this run, overriding stamp.enforce in oteam config. The durable knob is 'oteam config stamp set --enforce off'.",
   )
   .action(
     async (

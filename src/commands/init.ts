@@ -2,7 +2,15 @@ import { Command } from "commander";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import readline from "node:readline";
-import { addVault, listVaults } from "../lib/config.ts";
+import {
+  addVault,
+  clearStamp,
+  getStampConfig,
+  listVaults,
+  setStampEnforce,
+  setStampHost,
+  type StampConfig,
+} from "../lib/config.ts";
 import {
   bootstrapWorkspace,
   defaultWorkspacePath,
@@ -105,6 +113,19 @@ function prompt(question: string, fallback: string): Promise<string> {
   });
 }
 
+function promptRaw(question: string): Promise<string> {
+  return new Promise((resolvePrompt) => {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+    rl.question(question, (answer) => {
+      rl.close();
+      resolvePrompt(answer.trim());
+    });
+  });
+}
+
 export interface RunInitOptions {
   /** Workspace location. Alias of `workspace`. Default: `~/openteam/`. */
   dir?: string;
@@ -114,7 +135,27 @@ export interface RunInitOptions {
   docsDir?: string;
   /** Skip interactive prompt; use defaults. */
   yes?: boolean;
+  /**
+   * Skip the stamp prompt-pair entirely. Existing stamp config is left
+   * untouched. AC #4: `oteam init --skip-stamp` jumps the prompts.
+   */
+  skipStamp?: boolean;
+  /**
+   * Test injection — bypass the stamp host readline. Empty string means
+   * "user hit enter" (skip). When `undefined`, the readline runs.
+   */
+  stampHost?: string;
+  /**
+   * Test injection — bypass the stamp enforce readline. Only consulted when
+   * `stampHost` resolves to a non-empty value (host or pre-existing).
+   */
+  stampEnforce?: boolean;
 }
+
+export type StampInitOutcome =
+  | { action: "skipped" }
+  | { action: "unchanged"; stamp: StampConfig | null }
+  | { action: "set"; stamp: StampConfig | null };
 
 export interface RunInitResult {
   workspace: {
@@ -126,6 +167,7 @@ export interface RunInitResult {
   };
   agents: { path: string; result: UpsertResult };
   claude: { path: string; result: UpsertResult };
+  stamp: StampInitOutcome;
 }
 
 export async function runInit(opts: RunInitOptions): Promise<RunInitResult> {
@@ -156,6 +198,8 @@ export async function runInit(opts: RunInitOptions): Promise<RunInitResult> {
   const registration = addVault(bootstrap.path);
   const currentDefault = listVaults().default;
 
+  const stamp = await runStampStep(opts);
+
   const docsDir = resolve(expandHome(opts.docsDir ?? home));
   if (!existsSync(docsDir)) {
     process.stderr.write(`oteam init: docs directory does not exist: ${docsDir}\n`);
@@ -178,7 +222,96 @@ export async function runInit(opts: RunInitOptions): Promise<RunInitResult> {
     },
     agents: { path: agentsPath, result: agents },
     claude: { path: claudePath, result: claude },
+    stamp,
   };
+}
+
+async function runStampStep(opts: RunInitOptions): Promise<StampInitOutcome> {
+  // AC #4: --skip-stamp jumps the prompts entirely and leaves the stamp
+  // block untouched. -y also skips, so the non-interactive path stays
+  // backwards-compatible (no surprise stdin reads).
+  if (opts.skipStamp || opts.yes) {
+    return { action: "skipped" };
+  }
+
+  const existing = getStampConfig();
+
+  // Decide host. Test injection wins; otherwise prompt.
+  let hostInput: string;
+  if (opts.stampHost !== undefined) {
+    hostInput = opts.stampHost.trim();
+  } else {
+    const hint = existing
+      ? ` (current: ${existing.host}; press enter to keep)`
+      : " (leave blank to skip)";
+    hostInput = await promptRaw(
+      `Configure a stamp server for signed-merge integration?\n  Paste host (e.g. ssh://git@host:port)${hint}: `,
+    );
+  }
+
+  // Empty input means: keep current value if any, else skip stamp entirely.
+  let nextHost: string | null;
+  if (hostInput.length === 0) {
+    nextHost = existing?.host ?? null;
+  } else {
+    nextHost = hostInput;
+  }
+
+  if (nextHost === null) {
+    // No host now, no host before — nothing to write.
+    return { action: "unchanged", stamp: null };
+  }
+
+  // Decide enforce. Test injection wins; otherwise prompt with default N.
+  let enforce: boolean;
+  if (opts.stampEnforce !== undefined) {
+    enforce = opts.stampEnforce;
+  } else {
+    const enforceHint = existing
+      ? ` [${existing.enforce ? "Y/n" : "y/N"}]`
+      : " [y/N]";
+    const enforceAnswer = await promptRaw(
+      `Refuse to operate on repos not registered on this stamp server?${enforceHint}: `,
+    );
+    if (enforceAnswer.length === 0) {
+      enforce = existing?.enforce ?? false;
+    } else {
+      enforce = /^(y|yes)$/i.test(enforceAnswer);
+    }
+  }
+
+  // Write only when something differs. Avoids touching the file on a no-op
+  // re-run where the user just hit enter twice.
+  if (
+    existing &&
+    existing.host === nextHost &&
+    existing.enforce === enforce
+  ) {
+    return { action: "unchanged", stamp: existing };
+  }
+
+  // Use the helpers so the same validation (including the G3 guard for
+  // "enforce on with no host") fires whether the value comes from the
+  // prompt or a CLI sub-command later.
+  const hostResult = setStampHost(nextHost);
+  if (enforce !== hostResult.enforce) {
+    const enforceResult = setStampEnforce(enforce);
+    return { action: "set", stamp: enforceResult };
+  }
+  return { action: "set", stamp: hostResult };
+}
+
+function stampLine(outcome: StampInitOutcome): string | null {
+  switch (outcome.action) {
+    case "skipped":
+      return null;
+    case "unchanged":
+      if (!outcome.stamp) return null;
+      return `ℹ️  Stamp integration: host=${outcome.stamp.host} enforce=${outcome.stamp.enforce ? "on" : "off"} (no changes)`;
+    case "set":
+      if (!outcome.stamp) return "✅ Stamp integration: cleared";
+      return `✅ Stamp integration: host=${outcome.stamp.host} enforce=${outcome.stamp.enforce ? "on" : "off"}`;
+  }
 }
 
 function pastTense(action: UpsertResult): string {
@@ -221,7 +354,11 @@ export function buildInitCommand(): Command {
       "--docs-dir <path>",
       "Where to write AGENTS.md / CLAUDE.md (default: $HOME)",
     )
-    .option("-y, --yes", "Skip prompt, use defaults")
+    .option("-y, --yes", "Skip prompts, use defaults")
+    .option(
+      "--skip-stamp",
+      "Skip the stamp host/enforce prompts (leaves any existing config alone)",
+    )
     .action(async (opts: RunInitOptions) => {
       let result: RunInitResult;
       try {
@@ -240,5 +377,7 @@ export function buildInitCommand(): Command {
       process.stdout.write(
         `✅ ${pastTense(result.claude.result)} ${result.claude.path}\n`,
       );
+      const stampMsg = stampLine(result.stamp);
+      if (stampMsg) process.stdout.write(`${stampMsg}\n`);
     });
 }

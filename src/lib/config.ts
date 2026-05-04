@@ -7,9 +7,18 @@ import {
 import { homedir } from "node:os";
 import { basename, isAbsolute, resolve, join } from "node:path";
 
+export interface StampConfig {
+  /** Stamp server URL prefix, e.g. `ssh://git@host:port` (no trailing slash). */
+  host: string;
+  /** When true, `oteam assign` refuses repos not registered on the stamp server. */
+  enforce: boolean;
+}
+
 export interface OteamConfig {
   vaults: Record<string, string>;
   default: string | null;
+  /** Null/absent both mean "stamp integration is off". */
+  stamp: StampConfig | null;
 }
 
 export interface ResolvedVault {
@@ -27,7 +36,7 @@ export function configPath(): string {
 
 export function readConfig(): OteamConfig {
   const path = configPath();
-  if (!existsSync(path)) return { vaults: {}, default: null };
+  if (!existsSync(path)) return { vaults: {}, default: null, stamp: null };
   // existsSync already covers not-found; let real I/O errors (perms, etc.)
   // propagate so the user can fix them rather than silently falling back to
   // an empty config — which a subsequent writeConfig would then clobber.
@@ -163,8 +172,10 @@ export function findVaultRootForPath(
 }
 
 function normalise(parsed: unknown): OteamConfig {
-  if (!parsed || typeof parsed !== "object") return { vaults: {}, default: null };
-  const obj = parsed as { vaults?: unknown; default?: unknown };
+  if (!parsed || typeof parsed !== "object") {
+    return { vaults: {}, default: null, stamp: null };
+  }
+  const obj = parsed as { vaults?: unknown; default?: unknown; stamp?: unknown };
   const vaults: Record<string, string> = {};
   if (obj.vaults && typeof obj.vaults === "object") {
     for (const [name, value] of Object.entries(obj.vaults as Record<string, unknown>)) {
@@ -175,7 +186,69 @@ function normalise(parsed: unknown): OteamConfig {
     typeof obj.default === "string" && obj.default in vaults
       ? obj.default
       : null;
-  return { vaults, default: def };
+  return { vaults, default: def, stamp: normaliseStamp(obj.stamp) };
+}
+
+function normaliseStamp(value: unknown): StampConfig | null {
+  // AC #3: tolerate absent / explicit null / present forms. Empty-host
+  // shapes round-trip to null so a half-cleared block doesn't masquerade as
+  // "stamp configured."
+  if (value == null) return null;
+  if (typeof value !== "object") return null;
+  const s = value as { host?: unknown; enforce?: unknown };
+  if (typeof s.host !== "string") return null;
+  const host = s.host.trim();
+  if (host.length === 0) return null;
+  return { host: stripTrailingSlash(host), enforce: s.enforce === true };
+}
+
+function stripTrailingSlash(s: string): string {
+  return s.endsWith("/") ? s.replace(/\/+$/, "") : s;
+}
+
+export function getStampConfig(): StampConfig | null {
+  return readConfig().stamp;
+}
+
+export function setStampHost(host: string): StampConfig {
+  const trimmed = host.trim();
+  if (trimmed.length === 0) {
+    throw new Error("stamp host cannot be empty — pass a value like ssh://git@host:port");
+  }
+  const config = readConfig();
+  const next: StampConfig = {
+    host: stripTrailingSlash(trimmed),
+    enforce: config.stamp?.enforce ?? false,
+  };
+  config.stamp = next;
+  writeConfig(config);
+  return next;
+}
+
+export function setStampEnforce(enforce: boolean): StampConfig {
+  const config = readConfig();
+  // G3: refuse to enable enforcement without a host. Silent fallback to
+  // ~/.stamp/server.yml would re-couple oteam to stamp's filesystem; auto-
+  // clearing the flag would silently change the user's intent. Loud error
+  // forces them to either set a host or back out of the change.
+  if (enforce && (!config.stamp || config.stamp.host.length === 0)) {
+    throw new Error(
+      "cannot set stamp.enforce on with no stamp.host — run 'oteam config stamp set --host <url>' first",
+    );
+  }
+  const next: StampConfig = {
+    host: config.stamp?.host ?? "",
+    enforce,
+  };
+  config.stamp = next;
+  writeConfig(config);
+  return next;
+}
+
+export function clearStamp(): void {
+  const config = readConfig();
+  config.stamp = null;
+  writeConfig(config);
 }
 
 function findEntry(config: OteamConfig, nameOrPath: string): string | null {
