@@ -230,7 +230,119 @@ describe("config: malformed config file", () => {
 describe("config: empty state", () => {
   it("readConfig returns empty when the file does not exist", async () => {
     const r = cfg.readConfig();
-    assert.deepEqual(r, { vaults: {}, default: null });
+    assert.deepEqual(r, { vaults: {}, default: null, stamp: null });
     assert.ok(!existsSync(cfg.configPath()));
+  });
+});
+
+describe("config: stamp normalise tolerance (AC #3)", () => {
+  it("absent stamp key → stamp: null", async () => {
+    mkdirSync(cfg.configDir(), { recursive: true });
+    writeFileSync(cfg.configPath(), JSON.stringify({ vaults: {}, default: null }));
+    assert.equal(cfg.readConfig().stamp, null);
+  });
+
+  it("explicit stamp: null → stamp: null", async () => {
+    mkdirSync(cfg.configDir(), { recursive: true });
+    writeFileSync(
+      cfg.configPath(),
+      JSON.stringify({ vaults: {}, default: null, stamp: null }),
+    );
+    assert.equal(cfg.readConfig().stamp, null);
+  });
+
+  it("present block round-trips host + enforce", async () => {
+    mkdirSync(cfg.configDir(), { recursive: true });
+    writeFileSync(
+      cfg.configPath(),
+      JSON.stringify({
+        vaults: {},
+        default: null,
+        stamp: { host: "ssh://git@stamp.example.com:22000", enforce: true },
+      }),
+    );
+    assert.deepEqual(cfg.readConfig().stamp, {
+      host: "ssh://git@stamp.example.com:22000",
+      enforce: true,
+    });
+  });
+
+  it("strips trailing slash from stamp.host on read", async () => {
+    mkdirSync(cfg.configDir(), { recursive: true });
+    writeFileSync(
+      cfg.configPath(),
+      JSON.stringify({
+        vaults: {},
+        default: null,
+        stamp: { host: "ssh://git@stamp.example.com:22000/", enforce: false },
+      }),
+    );
+    assert.equal(cfg.readConfig().stamp?.host, "ssh://git@stamp.example.com:22000");
+  });
+
+  it("treats stamp with empty host as null (half-cleared block)", async () => {
+    mkdirSync(cfg.configDir(), { recursive: true });
+    writeFileSync(
+      cfg.configPath(),
+      JSON.stringify({
+        vaults: {},
+        default: null,
+        stamp: { host: "", enforce: true },
+      }),
+    );
+    assert.equal(cfg.readConfig().stamp, null);
+  });
+});
+
+describe("config: stamp helpers (AC #5)", () => {
+  it("setStampHost writes a fresh stamp block (enforce defaults to false)", async () => {
+    const next = cfg.setStampHost("ssh://git@stamp.example.com:22000");
+    assert.deepEqual(next, {
+      host: "ssh://git@stamp.example.com:22000",
+      enforce: false,
+    });
+    assert.deepEqual(cfg.readConfig().stamp, next);
+  });
+
+  it("setStampHost preserves existing enforce on update", async () => {
+    cfg.setStampHost("ssh://git@a:1");
+    cfg.setStampEnforce(true);
+    const next = cfg.setStampHost("ssh://git@b:2");
+    assert.equal(next.enforce, true);
+  });
+
+  it("setStampHost rejects empty value", async () => {
+    assert.throws(() => cfg.setStampHost("   "), /cannot be empty/);
+  });
+
+  it("setStampEnforce(true) rejects when no host is set (G3)", async () => {
+    assert.throws(() => cfg.setStampEnforce(true), /stamp\.enforce on with no stamp\.host/);
+  });
+
+  it("setStampEnforce(false) is allowed even with no host", async () => {
+    const next = cfg.setStampEnforce(false);
+    assert.equal(next.enforce, false);
+  });
+
+  it("clearStamp removes the stamp block", async () => {
+    cfg.setStampHost("ssh://git@a:1");
+    cfg.clearStamp();
+    assert.equal(cfg.readConfig().stamp, null);
+  });
+
+  it("getStampConfig returns the same object as readConfig().stamp", async () => {
+    cfg.setStampHost("ssh://git@a:1");
+    assert.deepEqual(cfg.getStampConfig(), cfg.readConfig().stamp);
+  });
+
+  it("setStampHost preserves vaults + default (config round-trip)", async () => {
+    const vaultDir = join(fakeHome, "v");
+    mkdirSync(vaultDir);
+    cfg.addVault(vaultDir, { name: "personal" });
+    cfg.setStampHost("ssh://git@x:1");
+    const persisted = JSON.parse(readFileSync(cfg.configPath(), "utf8"));
+    assert.equal(persisted.vaults.personal, vaultDir);
+    assert.equal(persisted.default, "personal");
+    assert.equal(persisted.stamp.host, "ssh://git@x:1");
   });
 });

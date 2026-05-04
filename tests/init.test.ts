@@ -12,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInit } from "../src/commands/init.ts";
-import { listVaults } from "../src/lib/config.ts";
+import { getStampConfig, listVaults } from "../src/lib/config.ts";
 import { SENTINEL_FILENAME } from "../src/lib/workspace-tree.ts";
 
 let savedHome: string | undefined;
@@ -198,5 +198,84 @@ describe("oteam init — workspace bootstrap", () => {
     assert.ok(existsSync(result.claude.path));
     // $HOME must NOT have received the docs when --docs-dir is set.
     assert.equal(existsSync(join(fakeHome, "AGENTS.md")), false);
+  });
+});
+
+describe("oteam init — stamp prompts (AGT-096)", () => {
+  // All tests pass `dir` so the workspace-path prompt doesn't block on
+  // stdin. We can't pass `yes: true` because that short-circuits the stamp
+  // step entirely (which is exactly what the first test below verifies).
+  function init(extra: Parameters<typeof runInit>[0] = {}) {
+    return runInit({ dir: join(fakeHome, "openteam"), ...extra });
+  }
+
+  it("--yes skips stamp prompts and leaves stamp config null", async () => {
+    const result = await init({ yes: true });
+    assert.equal(result.stamp.action, "skipped");
+    assert.equal(getStampConfig(), null);
+  });
+
+  it("--skip-stamp skips prompts and leaves any existing stamp block alone", async () => {
+    // Pre-set a stamp block so we can assert --skip-stamp doesn't touch it.
+    const { setStampHost, setStampEnforce } = await import("../src/lib/config.ts");
+    setStampHost("ssh://git@stamp.example.com:22000");
+    setStampEnforce(true);
+
+    const result = await init({ skipStamp: true });
+    assert.equal(result.stamp.action, "skipped");
+    assert.deepEqual(getStampConfig(), {
+      host: "ssh://git@stamp.example.com:22000",
+      enforce: true,
+    });
+  });
+
+  it("first init writes a stamp block when stampHost is supplied (AC #1, #3)", async () => {
+    const result = await init({
+      stampHost: "ssh://git@stamp.example.com:22000",
+      stampEnforce: false,
+    });
+    assert.equal(result.stamp.action, "set");
+    assert.deepEqual(getStampConfig(), {
+      host: "ssh://git@stamp.example.com:22000",
+      enforce: false,
+    });
+  });
+
+  it("first init with stampHost + stampEnforce: true writes enforce on (AC #2)", async () => {
+    const result = await init({
+      stampHost: "ssh://git@stamp.example.com:22000",
+      stampEnforce: true,
+    });
+    assert.equal(result.stamp.action, "set");
+    assert.equal(getStampConfig()?.enforce, true);
+  });
+
+  it("re-init with empty stampHost keeps the existing host (AC #4 pre-fill)", async () => {
+    await init({
+      stampHost: "ssh://git@first.example.com:22000",
+      stampEnforce: true,
+    });
+    // Empty string means "user pressed enter to keep current."
+    const result = await init({ stampHost: "", stampEnforce: true });
+    assert.equal(result.stamp.action, "unchanged");
+    assert.equal(getStampConfig()?.host, "ssh://git@first.example.com:22000");
+    assert.equal(getStampConfig()?.enforce, true);
+  });
+
+  it("re-init can flip enforce without touching host (AC #4)", async () => {
+    await init({
+      stampHost: "ssh://git@stamp.example.com:22000",
+      stampEnforce: true,
+    });
+    const result = await init({ stampHost: "", stampEnforce: false });
+    assert.equal(result.stamp.action, "set");
+    assert.equal(getStampConfig()?.host, "ssh://git@stamp.example.com:22000");
+    assert.equal(getStampConfig()?.enforce, false);
+  });
+
+  it("empty stampHost on first init leaves stamp config null (AC #1 leave-blank)", async () => {
+    const result = await init({ stampHost: "" });
+    assert.equal(result.stamp.action, "unchanged");
+    assert.equal(getStampConfig(), null);
   });
 });

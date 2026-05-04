@@ -2,7 +2,11 @@ import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, basename, dirname, join } from "node:path";
-import { findVaultRootForPath, readConfig } from "../lib/config.ts";
+import {
+  findVaultRootForPath,
+  readConfig,
+  type OteamConfig,
+} from "../lib/config.ts";
 import {
   envSourcingPrefix,
   findKittyBinary,
@@ -29,6 +33,7 @@ import {
   prepareAgentWorkspace,
   StampGateError,
   type PreparedWorkspace,
+  type WorkspaceSource,
 } from "../lib/workspace.ts";
 import { installRolePipelineSlashCommand } from "./install-slash-command.ts";
 
@@ -38,11 +43,30 @@ export interface AssignOptions {
   monitoredOrgs?: string[];
   workInline?: boolean;
   /**
-   * Bypass the stamp-server gate (AC #6 of AGT-050). Falls back to a fresh
-   * `git clone git@github.com:<repo>.git`. Loud and not recommended — the
-   * stamp gate exists to keep agents from pushing direct to GitHub.
+   * Per-run override of the `stamp.enforce` config knob. Forces the agent
+   * worktree to be cloned from `git@github.com:<repo>.git` regardless of
+   * what oteam config says. Has no effect when stamp enforcement is already
+   * off (the default). Documented in `oteam assign --help` as a one-shot
+   * escape hatch; the durable setting is `oteam config stamp set --enforce off`.
    */
   noStamp?: boolean;
+}
+
+function resolveWorkspaceMode(
+  config: OteamConfig,
+  noStamp: boolean,
+): WorkspaceSource {
+  if (noStamp) return "github";
+  if (config.stamp?.enforce) {
+    if (!config.stamp.host || config.stamp.host.length === 0) {
+      // G3 (AGT-096): hand-edited config can reach this state. Loud, fast.
+      throw new Error(
+        "oteam assign: stamp.enforce is on but stamp.host is empty — run 'oteam config stamp set --host <url>' or 'oteam config stamp set --enforce off'",
+      );
+    }
+    return "stamp";
+  }
+  return "github";
 }
 
 export async function assignTicket(opts: AssignOptions): Promise<void> {
@@ -83,18 +107,22 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
     );
   }
 
-  // AGT-050: prepare the isolated agent workspace before spawn. For a repo-
-  // bound ticket, this clones from the stamp server (or from GitHub when the
-  // operator explicitly passes --no-stamp) and uses the cloned worktree as
-  // the spawn cwd. Vault-only tickets (no `repo:`) skip workspace prep and
-  // fall back to the vault directory, matching the prior behaviour.
+  // AGT-096: pick the clone source from oteam config. With `stamp.enforce:
+  // true` the AGT-050 stamp gate fires (clone from stamp; failure exits
+  // non-zero). With anything else (no stamp, or `stamp.enforce: false`) the
+  // worktree is cloned from GitHub directly. The legacy `--no-stamp` flag
+  // forces the github path regardless — it's a per-run override of the
+  // enforce config knob (AGT-098 will retire the flag once the surface
+  // settles).
   let workspace: PreparedWorkspace | null = null;
   if (ticket.repo) {
+    const mode = resolveWorkspaceMode(config, opts.noStamp ?? false);
     try {
       workspace = prepareAgentWorkspace({
         ticketId: ticket.id,
         repoSlug: ticket.repo,
-        noStamp: opts.noStamp ?? false,
+        mode,
+        stampHost: mode === "stamp" ? config.stamp?.host : undefined,
         activeTicketIds: collectActiveTicketIds(resolvedVault.path),
       });
     } catch (err) {
@@ -104,7 +132,9 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
       }
       throw err;
     }
-    if (opts.noStamp) {
+    if (opts.noStamp && config.stamp?.enforce) {
+      // Loud only when the override actually changes behaviour. If the user
+      // is in no-enforce mode anyway, repeating the warning is just noise.
       process.stderr.write(
         `oteam assign: --no-stamp set; cloned from ${workspace.originUrl}. The stamp gate is bypassed — verify any push manually.\n`,
       );
