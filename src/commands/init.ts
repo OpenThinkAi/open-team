@@ -2,18 +2,25 @@ import { Command } from "commander";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import readline from "node:readline";
+import { addVault, listVaults } from "../lib/config.ts";
+import {
+  bootstrapWorkspace,
+  defaultWorkspacePath,
+  WorkspaceConflictError,
+  type BootstrapOutcome,
+} from "../lib/workspace-tree.ts";
 
 const BLOCK_BEGIN =
   "<!-- oteam:begin (managed by `oteam init` — do not edit between markers) -->";
 const BLOCK_END = "<!-- oteam:end -->";
 
-const AGENTS_BODY = `## oteam — vault-driven role pipeline for Claude agents
+const AGENTS_BODY = `## oteam — workspace-driven role pipeline for Claude agents
 
 If the user asks you to **search, find, list, filter, count, or file
-tickets**, or mentions a "vault", an "Obsidian vault", an \`AGT-NNN\` id, a
-project, "ingesting GitHub issues or PRs", or driving tickets through a
-"role pipeline" — \`oteam\` is the right tool. The vault is a directory of
-markdown files (typically \`~/Documents/<vault>/tickets/<state>/AGT-NNN-*.md\`),
+tickets**, or mentions a "workspace", an "Obsidian vault", an \`AGT-NNN\` id,
+a project, "ingesting GitHub issues or PRs", or driving tickets through a
+"role pipeline" — \`oteam\` is the right tool. The workspace is a directory
+of markdown files (typically \`~/openteam/tickets/<state>/AGT-NNN-*.md\`),
 but **do not search it with \`find\` or \`grep\` directly.** The CLI knows the
 ticket schema and has structured + free-text filters; filesystem search
 does not, and you will fight false positives from incidental keyword
@@ -31,14 +38,14 @@ Other common verbs: \`oteam ticket new "<title>" [--project X]\` to file a
 ticket, \`oteam pull github owner/repo#NN\` to ingest a GitHub issue or PR,
 \`oteam assign <AGT-NNN>\` to drive a ticket through the role pipeline. Run
 \`oteam --help\` or \`oteam <command> --help\` for full details. If you don't
-know whether a vault is configured, \`oteam config vault list\` tells you.
+know whether a workspace is configured, \`oteam config vault list\` tells you.
 `;
 
 const CLAUDE_BODY = `## oteam
 
 If the user asks to search, find, list, or file tickets, or mentions a
-"vault", "Obsidian vault", an \`AGT-NNN\` id, or a role pipeline, use the
-\`oteam\` CLI — **do not** \`find\`/\`grep\` the vault directly. Start with
+"workspace", "Obsidian vault", an \`AGT-NNN\` id, or a role pipeline, use the
+\`oteam\` CLI — **do not** \`find\`/\`grep\` the workspace directly. Start with
 \`oteam list --grep "<term>"\` or \`oteam list --match "<term>"\`. See
 \`AGENTS.md\` next to this file for the short summary and \`oteam --help\` for
 the full surface.
@@ -99,45 +106,76 @@ function prompt(question: string, fallback: string): Promise<string> {
 }
 
 export interface RunInitOptions {
+  /** Workspace location. Alias of `workspace`. Default: `~/openteam/`. */
   dir?: string;
+  /** Workspace location (alias of `dir`). */
+  workspace?: string;
+  /** Where to write the AGENTS.md / CLAUDE.md guidance block. Default: `$HOME`. */
+  docsDir?: string;
+  /** Skip interactive prompt; use defaults. */
   yes?: boolean;
 }
 
 export interface RunInitResult {
+  workspace: {
+    path: string;
+    outcome: BootstrapOutcome;
+    registeredAs: string;
+    promotedToDefault: boolean;
+    currentDefault: string | null;
+  };
   agents: { path: string; result: UpsertResult };
   claude: { path: string; result: UpsertResult };
 }
 
 export async function runInit(opts: RunInitOptions): Promise<RunInitResult> {
   const home = process.env.HOME ?? "";
-  const defaultDir = home;
+  const defaultWorkspace = defaultWorkspacePath();
 
-  let targetDir: string;
-  if (opts.dir) {
-    targetDir = opts.dir;
-  } else if (opts.yes) {
-    targetDir = defaultDir;
-  } else {
-    targetDir = await prompt(
-      `Where should AGENTS.md / CLAUDE.md be written? (${defaultDir}) `,
-      defaultDir,
+  if (opts.dir && opts.workspace && opts.dir !== opts.workspace) {
+    throw new Error(
+      `oteam init: --dir and --workspace disagree (${opts.dir} vs ${opts.workspace}); pass one`,
     );
   }
+  const workspaceFlag = opts.workspace ?? opts.dir;
 
-  targetDir = resolve(expandHome(targetDir));
+  let workspaceDir: string;
+  if (workspaceFlag) {
+    workspaceDir = workspaceFlag;
+  } else if (opts.yes) {
+    workspaceDir = defaultWorkspace;
+  } else {
+    workspaceDir = await prompt(
+      `Where should the oteam workspace live? (${defaultWorkspace}) `,
+      defaultWorkspace,
+    );
+  }
+  workspaceDir = resolve(expandHome(workspaceDir));
 
-  if (!existsSync(targetDir)) {
-    process.stderr.write(`oteam init: directory does not exist: ${targetDir}\n`);
+  const bootstrap = bootstrapWorkspace(workspaceDir);
+  const registration = addVault(bootstrap.path);
+  const currentDefault = listVaults().default;
+
+  const docsDir = resolve(expandHome(opts.docsDir ?? home));
+  if (!existsSync(docsDir)) {
+    process.stderr.write(`oteam init: docs directory does not exist: ${docsDir}\n`);
     process.exit(1);
   }
 
-  const agentsPath = join(targetDir, "AGENTS.md");
-  const claudePath = join(targetDir, "CLAUDE.md");
+  const agentsPath = join(docsDir, "AGENTS.md");
+  const claudePath = join(docsDir, "CLAUDE.md");
 
   const agents = upsertBlock(agentsPath, AGENTS_BODY);
   const claude = upsertBlock(claudePath, CLAUDE_BODY);
 
   return {
+    workspace: {
+      path: bootstrap.path,
+      outcome: bootstrap.outcome,
+      registeredAs: registration.name,
+      promotedToDefault: registration.promotedToDefault,
+      currentDefault,
+    },
     agents: { path: agentsPath, result: agents },
     claude: { path: claudePath, result: claude },
   };
@@ -154,18 +192,48 @@ function pastTense(action: UpsertResult): string {
   }
 }
 
+function workspaceLine(ws: RunInitResult["workspace"]): string {
+  if (ws.outcome === "already-initialised") {
+    return `ℹ️  Workspace already initialised at ${ws.path} (registered as "${ws.registeredAs}")`;
+  }
+  const trail = ws.promotedToDefault
+    ? "set as default"
+    : ws.currentDefault && ws.currentDefault !== ws.registeredAs
+      ? `current default is "${ws.currentDefault}" — pass \`oteam config vault default --set ${ws.registeredAs}\` to switch`
+      : "registered";
+  return `✅ Created workspace at ${ws.path} (registered as "${ws.registeredAs}"; ${trail})`;
+}
+
 export function buildInitCommand(): Command {
   return new Command("init")
     .description(
-      "Write oteam guidance to AGENTS.md (full) and CLAUDE.md (pointer) so agents discover oteam at session start",
+      "Bootstrap an oteam workspace and write guidance to AGENTS.md / CLAUDE.md",
     )
     .option(
       "-d, --dir <path>",
-      "Target directory for AGENTS.md and CLAUDE.md (defaults to $HOME)",
+      "Workspace location (default: ~/openteam)",
+    )
+    .option(
+      "-w, --workspace <path>",
+      "Workspace location (alias of --dir)",
+    )
+    .option(
+      "--docs-dir <path>",
+      "Where to write AGENTS.md / CLAUDE.md (default: $HOME)",
     )
     .option("-y, --yes", "Skip prompt, use defaults")
     .action(async (opts: RunInitOptions) => {
-      const result = await runInit(opts);
+      let result: RunInitResult;
+      try {
+        result = await runInit(opts);
+      } catch (err) {
+        if (err instanceof WorkspaceConflictError) {
+          process.stderr.write(`${err.message}\n`);
+          process.exit(1);
+        }
+        throw err;
+      }
+      process.stdout.write(`${workspaceLine(result.workspace)}\n`);
       process.stdout.write(
         `✅ ${pastTense(result.agents.result)} ${result.agents.path}\n`,
       );

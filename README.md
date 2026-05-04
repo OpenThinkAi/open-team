@@ -24,21 +24,39 @@ npm link
 
 `v0` is **private and not yet published to npm** (`package.json` has `"private": true`). Flip when the source repo goes public.
 
-## Vault setup
+## Quick start
 
-`open-team` reads from a `product-vault` directory. Layout:
+```sh
+oteam init
+```
+
+Creates `~/openteam/` with the workspace tree below, drops a `.oteam-workspace` sentinel, registers it in `~/.open-team/config.json` (promoting it to default if no default is set), and writes the oteam guidance block to `~/AGENTS.md` and `~/CLAUDE.md`. Re-running `oteam init` against an already-initialised path is a clean no-op; running against a non-empty unmarked directory exits non-zero rather than silently merging.
+
+Flags:
+
+- `oteam init --dir <path>` (or `-w, --workspace <path>`) — workspace location, default `~/openteam/`.
+- `oteam init --docs-dir <path>` — where to write `AGENTS.md` / `CLAUDE.md`, default `$HOME`.
+- `oteam init -y` — skip the interactive workspace-path prompt.
+
+> **Breaking change vs. earlier `oteam` builds:** `--dir` used to mean "where to write `AGENTS.md`/`CLAUDE.md`". It now means the workspace location. Use the new `--docs-dir` flag for the previous behaviour.
+
+## Workspace setup
+
+`open-team` reads from a workspace directory ("vault" is Obsidian's word; oteam doesn't depend on Obsidian). Layout:
 
 ```
-product-vault/
-├── 00-meta/templates/ticket.md
+openteam/
+├── .oteam-workspace          # sentinel — written by `oteam init`
+├── 00-meta/README.md
 ├── tickets/
 │   ├── triage/  refined/  in-progress/  qa/  blocked/
+├── projects/
 └── archive/<YYYY-MM>/
 ```
 
 A ticket's `state:` frontmatter must always match its containing folder under `tickets/`.
 
-For the simplest single-vault setup, leave `~/Documents/product-vault` in place or set `PRODUCT_VAULT_PATH`. For multiple vaults (personal + work, etc.) see [Config & multiple vaults](#config--multiple-vaults).
+For the simplest single-workspace setup, run `oteam init` (creates and registers `~/openteam/`). To use an existing tree, register it via `oteam config vault add <path>` or set `PRODUCT_VAULT_PATH`. For multiple workspaces (personal + work, etc.) see [Config & multiple vaults](#config--multiple-vaults).
 
 ## Subcommands
 
