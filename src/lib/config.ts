@@ -37,11 +37,22 @@ export interface OteamConfig {
    */
   models: ModelsConfig;
   /**
+   * AGT-107: when true (the default), the runner downshifts the Product
+   * spawn to Haiku 4.5 if the ticket is `source.type: manual` AND its
+   * `## Acceptance Criteria` is already populated. In-memory this lives as a
+   * sibling of `models`; on-disk it's nested under `models.productDownshift`
+   * per AC #3 to keep the config-file surface organised.
+   */
+  productDownshift: boolean;
+  /**
    * AGT-108: per-phase wall-clock + token telemetry. Defaults to enabled.
    * Off means `recordPhase()` short-circuits — no JSONL writes occur.
    */
   telemetry: TelemetryConfig;
 }
+
+/** AGT-107: the default for `productDownshift` — heuristic on. */
+const DEFAULT_PRODUCT_DOWNSHIFT = true;
 
 export interface ResolvedVault {
   name: string;
@@ -83,8 +94,17 @@ export function writeConfig(config: OteamConfig): void {
     default: config.default,
     stamp: config.stamp,
   };
-  if (Object.keys(config.models).length > 0) {
-    onDisk.models = config.models;
+  // AGT-107: the in-memory `productDownshift` flag is serialised as a
+  // sibling of the per-phase model overrides at `models.productDownshift`.
+  // Build a single on-disk `models` object so the two surfaces co-locate
+  // cleanly, but only emit the block when something deviates from defaults
+  // (matches how empty `models` and default-on `telemetry` are omitted).
+  const onDiskModels: Record<string, unknown> = { ...config.models };
+  if (config.productDownshift !== DEFAULT_PRODUCT_DOWNSHIFT) {
+    onDiskModels.productDownshift = config.productDownshift;
+  }
+  if (Object.keys(onDiskModels).length > 0) {
+    onDisk.models = onDiskModels;
   }
   // Telemetry defaults to enabled, so omit the block from disk in that case
   // to keep a fresh config tidy (mirrors how empty `models` is omitted).
@@ -101,6 +121,7 @@ function emptyConfig(): OteamConfig {
     default: null,
     stamp: null,
     models: {},
+    productDownshift: DEFAULT_PRODUCT_DOWNSHIFT,
     telemetry: { enabled: true },
   };
 }
@@ -245,8 +266,18 @@ function normalise(parsed: unknown): OteamConfig {
     default: def,
     stamp: normaliseStamp(obj.stamp),
     models: normaliseModels(obj.models),
+    productDownshift: normaliseProductDownshift(obj.models),
     telemetry: normaliseTelemetry(obj.telemetry),
   };
+}
+
+function normaliseProductDownshift(value: unknown): boolean {
+  // AC #3: default true. Only an explicit `false` flips it off; absent /
+  // null / malformed all read as the default. The flag lives nested under
+  // the on-disk `models` block per the prescribed surface.
+  if (!value || typeof value !== "object") return DEFAULT_PRODUCT_DOWNSHIFT;
+  const v = value as { productDownshift?: unknown };
+  return v.productDownshift !== false;
 }
 
 function normaliseTelemetry(value: unknown): TelemetryConfig {
@@ -410,6 +441,17 @@ export function seedDefaultModelsIfEmpty(): SeedModelsResult {
   config.models = { ...DEFAULT_MODELS };
   writeConfig(config);
   return { action: "seeded", models: config.models };
+}
+
+export function getProductDownshift(): boolean {
+  return readConfig().productDownshift;
+}
+
+export function setProductDownshift(enabled: boolean): boolean {
+  const config = readConfig();
+  config.productDownshift = enabled;
+  writeConfig(config);
+  return config.productDownshift;
 }
 
 export function getTelemetryEnabled(): boolean {

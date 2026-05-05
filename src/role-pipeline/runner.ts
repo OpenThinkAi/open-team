@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, basename, dirname, join } from "node:path";
 import {
@@ -18,7 +18,11 @@ import {
   preferredKittyContext,
   shellEscape,
 } from "../lib/kitty.ts";
-import { phaseForState, resolveRoleModel } from "../lib/models.ts";
+import {
+  HAIKU_PRODUCT_MODEL,
+  phaseForState,
+  resolveModelForTicket,
+} from "../lib/models.ts";
 import { recordPhase } from "../lib/telemetry.ts";
 import {
   formatProjectContextForPrompt,
@@ -145,15 +149,26 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
   }
 
   // AGT-023: when the ticket carries `project: <id>`, load the project's
-  // README + sibling-file index and pass it to claude as an appended system
-  // prompt. Lets the agent auto-resolve project-wide design decisions instead
-  // of bubbling them up to the human as a "gap."
+  // README + sibling-file index. AGT-107 may also append a small Product-
+  // agent hint when the haiku-downshift heuristic fires; both share the
+  // same `--append-system-prompt` payload (single tmp file, single flag).
   const projectContext = loadProjectContext(resolvedVault.path, ticket.project);
 
   // AGT-105: pick the per-phase model from oteam config based on the
   // ticket's current state. Each `oteam assign` spawn drives one phase, so
   // resolving once here covers both the kitty and inline spawn shapes.
-  const model = resolveRoleModel(ticket.state, config.models);
+  // AGT-107 layers a Haiku downshift on the Product phase when the ticket
+  // is a well-formed manual one — populated AC, source.type=manual, knob on.
+  const ticketBody = readTicketBody(ticketPath);
+  const model = resolveModelForTicket({
+    state: ticket.state,
+    sourceType: ticket.source.type,
+    body: ticketBody,
+    productDownshift: config.productDownshift,
+    models: config.models,
+  });
+  const haikuDownshift = model === HAIKU_PRODUCT_MODEL && ticket.state === "triage";
+  const systemPrompt = composeSystemPrompt(ticket.id, projectContext, haikuDownshift);
 
   // AGT-108: mint a deterministic session UUID + start timestamp before
   // spawning. `--session-id` pins the per-message JSONL Claude Code writes
@@ -179,7 +194,7 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
       claudePath,
       ticketPath,
       resolvedVault.path,
-      projectContext,
+      systemPrompt,
       workspace,
       model,
       telemetry,
@@ -198,7 +213,7 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
       claudePath,
       ticketPath,
       resolvedVault.path,
-      projectContext,
+      systemPrompt,
       workspace,
       model,
       telemetry,
@@ -223,13 +238,14 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
   const escapedTicket = shellEscape(ticketPath);
   const slashPrompt = `/assign-ticket ${escapedTicket}`;
   const escapedPrompt = shellEscape(slashPrompt);
-  // Project context (AGT-023) gets injected via --append-system-prompt with the
-  // payload sourced from a tmp file. Inlining a multi-KB markdown blob into the
-  // shell command is fragile (backticks, $-subst); `"$(cat tmpfile)"` is safe
-  // because the outer single-quoting protects the substitution and the inner
-  // double-quoting preserves whitespace.
-  const projectFlag = projectContext
-    ? ` --append-system-prompt "$(cat '${shellEscape(projectContext.tmpFile)}')"`
+  // System-prompt context (AGT-023 project README + AGT-107 haiku-downshift
+  // hint) gets injected via --append-system-prompt with the payload sourced
+  // from a tmp file. Inlining a multi-KB markdown blob into the shell command
+  // is fragile (backticks, $-subst); `"$(cat tmpfile)"` is safe because the
+  // outer single-quoting protects the substitution and the inner double-
+  // quoting preserves whitespace.
+  const projectFlag = systemPrompt
+    ? ` --append-system-prompt "$(cat '${shellEscape(systemPrompt.tmpFile)}')"`
     : "";
   const sessionFlag = telemetry
     ? ` --session-id '${shellEscape(telemetry.sessionId)}'`
@@ -302,7 +318,7 @@ function runInline(
   claudePath: string,
   ticketPath: string,
   vaultPath: string,
-  projectContext: ProjectContextHandle | null,
+  systemPrompt: SystemPromptHandle | null,
   workspace: PreparedWorkspace | null,
   model: string,
   telemetry: TelemetryHandle | null,
@@ -318,12 +334,12 @@ function runInline(
   if (telemetry) {
     args.push("--session-id", telemetry.sessionId);
   }
-  if (projectContext) {
+  if (systemPrompt) {
     // Inline path uses spawnSync's argv directly — no shell escaping needed,
     // and we can pass the prompt content rather than reading it from the tmp
     // file. Tmp file is still written for parity with the kitty path (and so
     // failure modes match across the two spawn shapes).
-    args.push("--append-system-prompt", projectContext.content);
+    args.push("--append-system-prompt", systemPrompt.content);
   }
   args.push(`/assign-ticket ${ticketPath}`);
 
@@ -367,17 +383,18 @@ function collectActiveTicketIds(vaultPath: string): Set<string> {
   return ids;
 }
 
-interface ProjectContextHandle {
+interface SystemPromptHandle {
   /** Absolute path to the tmp file containing the prompt payload. */
   tmpFile: string;
   /** The same payload as a string (used by the inline path). */
   content: string;
 }
 
+/** Project README only — no haiku-downshift hint. */
 function loadProjectContext(
   vaultPath: string,
   projectId: string | null,
-): ProjectContextHandle | null {
+): string | null {
   if (!projectId) return null;
   const project = readProject(vaultPath, projectId);
   if (!project) {
@@ -386,15 +403,61 @@ function loadProjectContext(
     );
     return null;
   }
-  const content = formatProjectContextForPrompt(project);
-  // Tmp file lifetime: written once per spawn, never cleaned up. The OS will
-  // sweep /tmp on reboot. Using the project id (sanitised) in the filename so
-  // re-spawns overwrite cleanly and a stale file from yesterday doesn't survive
-  // forever per ticket.
-  const safeId = projectId.replace(/[^a-zA-Z0-9._-]/g, "_");
-  const tmpFile = join(tmpdir(), `oteam-project-${safeId}.md`);
+  return formatProjectContextForPrompt(project);
+}
+
+/**
+ * Combine the project-context payload (AGT-023) and the AGT-107 haiku-
+ * downshift hint into a single `--append-system-prompt` payload. Returns
+ * null when neither is active so the spawn skips the flag entirely.
+ *
+ * The haiku-downshift hint tells the Product agent to mark its comment
+ * header as `(haiku-downshift)`. Putting the signal here (single source of
+ * truth) keeps the agent from re-running the heuristic itself.
+ */
+function composeSystemPrompt(
+  ticketId: string,
+  projectContext: string | null,
+  haikuDownshift: boolean,
+): SystemPromptHandle | null {
+  const parts: string[] = [];
+  if (projectContext) parts.push(projectContext);
+  if (haikuDownshift) parts.push(haikuDownshiftPromptHint());
+  if (parts.length === 0) return null;
+  const content = parts.join("\n\n");
+  // Tmp file is reused per ticket so re-spawns overwrite cleanly and stale
+  // files don't accumulate. /tmp is OS-swept on reboot.
+  const safeId = ticketId.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const tmpFile = join(tmpdir(), `oteam-prompt-${safeId}.md`);
   writeFileSync(tmpFile, content, "utf8");
   return { tmpFile, content };
+}
+
+function haikuDownshiftPromptHint(): string {
+  return [
+    "# Product agent: haiku-downshift heuristic active",
+    "",
+    "AGT-107: this ticket is a well-formed manual ticket (source.type=manual + populated `## Acceptance Criteria`), so the runner spawned you on Haiku 4.5 instead of the configured Product model. The heuristic exists to handle structural-cleanup cases cheaply; full synthesis still belongs on the configured Product model.",
+    "",
+    "When you advance the ticket, write the comment header as:",
+    "",
+    "    ### YYYY-MM-DD — Product agent (haiku-downshift)",
+    "",
+    "instead of the standard `### YYYY-MM-DD — Product agent`. That makes the heuristic visible in the ticket's audit trail.",
+  ].join("\n");
+}
+
+function readTicketBody(path: string): string {
+  // Best-effort: a read failure here would already have been surfaced by
+  // parseTicket above (which is called first), so a thrown read here is
+  // genuinely unexpected. Fall back to the empty string so the heuristic
+  // reads as "AC not populated" — that biases toward the configured Product
+  // model rather than silently downshifting.
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return "";
+  }
 }
 
 function findToolOnPath(name: string): string | null {

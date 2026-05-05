@@ -5,12 +5,14 @@ import {
   clearStamp,
   configPath,
   getModels,
+  getProductDownshift,
   getStampConfig,
   getTelemetryEnabled,
   listVaults,
   removeVault,
   setDefault,
   setModel,
+  setProductDownshift,
   setStampEnforce,
   setStampHost,
   setTelemetryEnabled,
@@ -181,6 +183,29 @@ export function buildConfigCommand(): Command {
       const m = getModels();
       const lines = PHASES.map((p) => `${p.padEnd(15)} ${m[p] ?? "(unset)"}`);
       process.stdout.write(lines.join("\n") + "\n");
+    });
+
+  models
+    .command("product-downshift <on|off|show>")
+    .description(
+      "Toggle the AGT-107 Haiku-downshift heuristic for well-formed manual tickets (default: on)",
+    )
+    .action((flag: string) => {
+      const lower = flag.toLowerCase();
+      if (lower === "show") {
+        process.stdout.write(`${getProductDownshift() ? "on" : "off"}\n`);
+        return;
+      }
+      if (lower !== "on" && lower !== "off") {
+        process.stderr.write(
+          `oteam config models product-downshift: expected on|off|show, got "${flag}"\n`,
+        );
+        process.exit(2);
+      }
+      const next = setProductDownshift(lower === "on");
+      process.stdout.write(
+        `✅ models.productDownshift = ${next ? "on" : "off"}\n`,
+      );
     });
 
   const telemetry = new Command("telemetry").description(
