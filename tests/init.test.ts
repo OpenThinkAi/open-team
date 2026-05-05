@@ -13,6 +13,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInit } from "../src/commands/init.ts";
 import {
+  configDir,
+  configPath,
   getModels,
   getStampConfig,
   listVaults,
@@ -320,7 +322,6 @@ describe("oteam init — default per-phase models (AGT-106)", () => {
 
   it("AC #3: existing config without a models block gets defaults written, other fields untouched", async () => {
     // Pre-write a legacy-shaped config (vaults + stamp present, no models).
-    const { configDir, configPath } = await import("../src/lib/config.ts");
     mkdirSync(configDir(), { recursive: true });
     writeFileSync(
       configPath(),
@@ -343,20 +344,10 @@ describe("oteam init — default per-phase models (AGT-106)", () => {
 
   it("AC #6 idempotency: re-running on a freshly-seeded config does not rewrite", async () => {
     await runInit({ yes: true });
-    const first = await import("node:fs").then((fs) =>
-      fs.readFileSync(
-        join(fakeHome, ".open-team", "config.json"),
-        "utf8",
-      ),
-    );
+    const first = readFileSync(configPath(), "utf8");
     const result = await runInit({ yes: true });
     assert.equal(result.models.action, "preserved");
-    const second = await import("node:fs").then((fs) =>
-      fs.readFileSync(
-        join(fakeHome, ".open-team", "config.json"),
-        "utf8",
-      ),
-    );
+    const second = readFileSync(configPath(), "utf8");
     assert.equal(first, second);
   });
 });

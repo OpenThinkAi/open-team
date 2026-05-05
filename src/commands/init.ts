@@ -11,7 +11,7 @@ import {
   type SeedModelsResult,
   type StampConfig,
 } from "../lib/config.ts";
-import type { ModelsConfig } from "../lib/models.ts";
+import { PHASES } from "../lib/models.ts";
 import {
   bootstrapWorkspace,
   defaultWorkspacePath,
@@ -200,10 +200,8 @@ export async function runInit(opts: RunInitOptions): Promise<RunInitResult> {
   const registration = addVault(bootstrap.path);
   const currentDefault = listVaults().default;
 
-  // Seed per-phase model defaults before the stamp step so the stdout
-  // ordering (workspace → models → stamp → docs) matches the order users
-  // think about config layers. Non-empty `models` blocks (any partial
-  // user customisation) are preserved per AC #2.
+  // Seeds defaults only when the on-disk `models` block is absent or empty;
+  // any partial user customisation is preserved verbatim per AC #2.
   const models = seedDefaultModelsIfEmpty();
 
   const stamp = await runStampStep(opts);
@@ -310,13 +308,10 @@ function modelsLine(result: SeedModelsResult): string {
   if (result.action === "preserved") {
     return "ℹ️  Models: existing customisation preserved";
   }
-  return `✅ Models: defaults seeded (${formatModels(result.models)})`;
-}
-
-function formatModels(models: ModelsConfig): string {
-  return (["product", "spike", "implementation", "qa"] as const)
-    .map((phase) => `${phase}=${models[phase]}`)
-    .join(", ");
+  const pairs = PHASES.map((phase) => `${phase}=${result.models[phase]}`).join(
+    ", ",
+  );
+  return `✅ Models: defaults seeded (${pairs})`;
 }
 
 function stampLine(outcome: StampInitOutcome): string | null {

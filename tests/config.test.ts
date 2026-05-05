@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as cfg from "../src/lib/config.ts";
+import { DEFAULT_MODELS } from "../src/lib/models.ts";
 
 let savedHome: string | undefined;
 let fakeHome = "";
@@ -456,8 +457,7 @@ describe("config: per-phase models (AGT-105)", () => {
 });
 
 describe("config: seedDefaultModelsIfEmpty (AGT-106)", () => {
-  it("writes DEFAULT_MODELS into a fresh config (AC #1/#3)", async () => {
-    const { DEFAULT_MODELS } = await import("../src/lib/models.ts");
+  it("writes DEFAULT_MODELS into a fresh config (AC #1/#3)", () => {
     const result = cfg.seedDefaultModelsIfEmpty();
     assert.equal(result.action, "seeded");
     assert.deepEqual(result.models, DEFAULT_MODELS);
@@ -483,33 +483,30 @@ describe("config: seedDefaultModelsIfEmpty (AGT-106)", () => {
     assert.deepEqual(cfg.getModels(), before);
   });
 
-  it("seeds when an existing config has no models key at all (AC #3)", async () => {
+  it("seeds when an existing config has no models key at all (AC #3)", () => {
     // Simulate a legacy config: vaults + stamp, no models field.
     mkdirSync(cfg.configDir(), { recursive: true });
     writeFileSync(
       cfg.configPath(),
       JSON.stringify({ vaults: {}, default: null, stamp: null }),
     );
-    const { DEFAULT_MODELS } = await import("../src/lib/models.ts");
     const result = cfg.seedDefaultModelsIfEmpty();
     assert.equal(result.action, "seeded");
     assert.deepEqual(cfg.getModels(), DEFAULT_MODELS);
   });
 
-  it("seeds when an existing config has an explicit empty models block", async () => {
+  it("seeds when an existing config has an explicit empty models block", () => {
     mkdirSync(cfg.configDir(), { recursive: true });
     writeFileSync(
       cfg.configPath(),
       JSON.stringify({ vaults: {}, default: null, stamp: null, models: {} }),
     );
-    const { DEFAULT_MODELS } = await import("../src/lib/models.ts");
     const result = cfg.seedDefaultModelsIfEmpty();
     assert.equal(result.action, "seeded");
     assert.deepEqual(cfg.getModels(), DEFAULT_MODELS);
   });
 
-  it("idempotency: a second call after seeding preserves the seed", async () => {
-    const { DEFAULT_MODELS } = await import("../src/lib/models.ts");
+  it("idempotency: a second call after seeding preserves the seed", () => {
     cfg.seedDefaultModelsIfEmpty();
     const second = cfg.seedDefaultModelsIfEmpty();
     assert.equal(second.action, "preserved");
