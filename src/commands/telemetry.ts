@@ -137,6 +137,3 @@ function formatTokenField(tokens: TokenUsage, key: keyof TokenUsage): string {
   const v = tokens[key];
   return typeof v === "number" ? String(v) : "-";
 }
-
-// Re-exported for tests and dependents that want the same line shape.
-export type { RunsLine };

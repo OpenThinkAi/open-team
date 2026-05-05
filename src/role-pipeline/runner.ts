@@ -162,9 +162,15 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
   // null on `blocked`/`done` states (no role agent runs there) — skip
   // telemetry plumbing entirely in that case.
   const phase = phaseForState(ticket.state);
-  const telemetryActive = phase !== null && getTelemetryEnabled();
-  const sessionId = telemetryActive ? randomUUID() : null;
-  const startedAt = telemetryActive ? new Date().toISOString() : null;
+  const telemetry: TelemetryHandle | null =
+    phase !== null && getTelemetryEnabled()
+      ? {
+          ticketId: ticket.id,
+          phase,
+          sessionId: randomUUID(),
+          startedAt: new Date().toISOString(),
+        }
+      : null;
 
   const kittyPath =
     !opts.workInline && isMacOS() ? findKittyBinary() : null;
@@ -176,9 +182,7 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
       projectContext,
       workspace,
       model,
-      telemetryActive
-        ? { ticketId: ticket.id, phase: phase!, sessionId: sessionId!, startedAt: startedAt! }
-        : null,
+      telemetry,
     );
     return;
   }
@@ -197,9 +201,7 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
       projectContext,
       workspace,
       model,
-      telemetryActive
-        ? { ticketId: ticket.id, phase: phase!, sessionId: sessionId!, startedAt: startedAt! }
-        : null,
+      telemetry,
     );
     return;
   }
@@ -229,8 +231,8 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
   const projectFlag = projectContext
     ? ` --append-system-prompt "$(cat '${shellEscape(projectContext.tmpFile)}')"`
     : "";
-  const sessionFlag = sessionId
-    ? ` --session-id '${shellEscape(sessionId)}'`
+  const sessionFlag = telemetry
+    ? ` --session-id '${shellEscape(telemetry.sessionId)}'`
     : "";
   // AGT-108: drop the old `exec` here — `exec` would replace the shell with
   // claude, leaving no way to run the telemetry record after claude exits.
@@ -239,14 +241,14 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
   // code so we can preserve it both into the record and as the wrapper's
   // exit status.
   const claudeCmd = `'${escapedClaude}' --dangerously-skip-permissions --model ${shellEscape(model)}${sessionFlag}${projectFlag} '${escapedPrompt}'`;
-  const telemetryTail = telemetryActive
+  const telemetryTail = telemetry
     ? buildTelemetryTail({
         oteamPath: findToolOnPath("oteam") ?? "oteam",
-        ticketId: ticket.id,
-        phase: phase!,
+        ticketId: telemetry.ticketId,
+        phase: telemetry.phase,
         model,
-        sessionId: sessionId!,
-        startedAt: startedAt!,
+        sessionId: telemetry.sessionId,
+        startedAt: telemetry.startedAt,
       })
     : "";
   const shellCmd = `${envPrefix}${claudeCmd}${telemetryTail}`;

@@ -108,9 +108,9 @@ export function recordPhase(input: RecordPhaseInput): void {
 
     const dir = telemetryDir();
     mkdirSync(dir, { recursive: true });
-    // O_APPEND is atomic for writes <= PIPE_BUF (4 KiB). Each line is well
-    // under that, so concurrent agents writing to the same `runs.jsonl`
-    // never tear each other's lines.
+    // O_APPEND on a regular file gives us non-interleaved writes for
+    // single-system_call appends like this one — concurrent agents writing
+    // to the same `runs.jsonl` won't tear each other's lines.
     appendFileSync(runsPath(dir), JSON.stringify(line) + "\n");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
