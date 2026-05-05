@@ -175,7 +175,7 @@ Set per-phase overrides with the new CLI:
 ```sh
 oteam config models set spike claude-opus-4-7
 oteam config models set implementation claude-sonnet-4-6
-oteam config models show         # product=(unset) spike=claude-opus-4-7 ...
+oteam config models show         # one phase per line; "(unset)" for unpinned phases
 oteam config models clear spike  # falls back to the role-pipeline default
 ```
 
