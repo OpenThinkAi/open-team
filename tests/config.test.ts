@@ -231,7 +231,13 @@ describe("config: malformed config file", () => {
 describe("config: empty state", () => {
   it("readConfig returns empty when the file does not exist", async () => {
     const r = cfg.readConfig();
-    assert.deepEqual(r, { vaults: {}, default: null, stamp: null, models: {} });
+    assert.deepEqual(r, {
+      vaults: {},
+      default: null,
+      stamp: null,
+      models: {},
+      telemetry: { enabled: true },
+    });
     assert.ok(!existsSync(cfg.configPath()));
   });
 });

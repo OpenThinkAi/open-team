@@ -21,6 +21,10 @@ export interface StampConfig {
   enforce: boolean;
 }
 
+export interface TelemetryConfig {
+  enabled: boolean;
+}
+
 export interface OteamConfig {
   vaults: Record<string, string>;
   default: string | null;
@@ -32,6 +36,11 @@ export interface OteamConfig {
    * Empty objects are omitted from the on-disk JSON to keep the file tidy.
    */
   models: ModelsConfig;
+  /**
+   * AGT-108: per-phase wall-clock + token telemetry. Defaults to enabled.
+   * Off means `recordPhase()` short-circuits — no JSONL writes occur.
+   */
+  telemetry: TelemetryConfig;
 }
 
 export interface ResolvedVault {
@@ -77,12 +86,23 @@ export function writeConfig(config: OteamConfig): void {
   if (Object.keys(config.models).length > 0) {
     onDisk.models = config.models;
   }
+  // Telemetry defaults to enabled, so omit the block from disk in that case
+  // to keep a fresh config tidy (mirrors how empty `models` is omitted).
+  if (!config.telemetry.enabled) {
+    onDisk.telemetry = config.telemetry;
+  }
   const body = JSON.stringify(onDisk, null, 2) + "\n";
   writeFileSync(configPath(), body);
 }
 
 function emptyConfig(): OteamConfig {
-  return { vaults: {}, default: null, stamp: null, models: {} };
+  return {
+    vaults: {},
+    default: null,
+    stamp: null,
+    models: {},
+    telemetry: { enabled: true },
+  };
 }
 
 export interface AddVaultResult {
@@ -208,6 +228,7 @@ function normalise(parsed: unknown): OteamConfig {
     default?: unknown;
     stamp?: unknown;
     models?: unknown;
+    telemetry?: unknown;
   };
   const vaults: Record<string, string> = {};
   if (obj.vaults && typeof obj.vaults === "object") {
@@ -224,7 +245,17 @@ function normalise(parsed: unknown): OteamConfig {
     default: def,
     stamp: normaliseStamp(obj.stamp),
     models: normaliseModels(obj.models),
+    telemetry: normaliseTelemetry(obj.telemetry),
   };
+}
+
+function normaliseTelemetry(value: unknown): TelemetryConfig {
+  // Default-on: absent / null / malformed → enabled. Only an explicit
+  // `{ enabled: false }` flips the switch off, mirroring AC #7's "default on,
+  // explicit opt-out" contract.
+  if (!value || typeof value !== "object") return { enabled: true };
+  const v = value as { enabled?: unknown };
+  return { enabled: v.enabled !== false };
 }
 
 function normaliseModels(value: unknown): ModelsConfig {
@@ -379,6 +410,17 @@ export function seedDefaultModelsIfEmpty(): SeedModelsResult {
   config.models = { ...DEFAULT_MODELS };
   writeConfig(config);
   return { action: "seeded", models: config.models };
+}
+
+export function getTelemetryEnabled(): boolean {
+  return readConfig().telemetry.enabled;
+}
+
+export function setTelemetryEnabled(enabled: boolean): TelemetryConfig {
+  const config = readConfig();
+  config.telemetry = { enabled };
+  writeConfig(config);
+  return config.telemetry;
 }
 
 export function clearModel(phase: Phase): ModelsConfig {

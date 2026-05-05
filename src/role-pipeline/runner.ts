@@ -1,9 +1,11 @@
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, basename, dirname, join } from "node:path";
 import {
   findVaultRootForPath,
+  getTelemetryEnabled,
   readConfig,
   type OteamConfig,
 } from "../lib/config.ts";
@@ -16,7 +18,8 @@ import {
   preferredKittyContext,
   shellEscape,
 } from "../lib/kitty.ts";
-import { resolveRoleModel } from "../lib/models.ts";
+import { phaseForState, resolveRoleModel } from "../lib/models.ts";
+import { recordPhase } from "../lib/telemetry.ts";
 import {
   formatProjectContextForPrompt,
   projectDir,
@@ -152,10 +155,31 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
   // resolving once here covers both the kitty and inline spawn shapes.
   const model = resolveRoleModel(ticket.state, config.models);
 
+  // AGT-108: mint a deterministic session UUID + start timestamp before
+  // spawning. `--session-id` pins the per-message JSONL Claude Code writes
+  // to `$CLAUDE_CONFIG_DIR/projects/<encoded-cwd>/<uuid>.jsonl`, which lets
+  // the post-spawn telemetry record sum tokens without guesswork. Phase is
+  // null on `blocked`/`done` states (no role agent runs there) — skip
+  // telemetry plumbing entirely in that case.
+  const phase = phaseForState(ticket.state);
+  const telemetryActive = phase !== null && getTelemetryEnabled();
+  const sessionId = telemetryActive ? randomUUID() : null;
+  const startedAt = telemetryActive ? new Date().toISOString() : null;
+
   const kittyPath =
     !opts.workInline && isMacOS() ? findKittyBinary() : null;
   if (!kittyPath) {
-    runInline(claudePath, ticketPath, resolvedVault.path, projectContext, workspace, model);
+    runInline(
+      claudePath,
+      ticketPath,
+      resolvedVault.path,
+      projectContext,
+      workspace,
+      model,
+      telemetryActive
+        ? { ticketId: ticket.id, phase: phase!, sessionId: sessionId!, startedAt: startedAt! }
+        : null,
+    );
     return;
   }
 
@@ -166,7 +190,17 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
     process.stderr.write(
       `oteam assign: no kitty socket reachable (preferring "${preferring}"); falling back to inline run.\n`,
     );
-    runInline(claudePath, ticketPath, resolvedVault.path, projectContext, workspace, model);
+    runInline(
+      claudePath,
+      ticketPath,
+      resolvedVault.path,
+      projectContext,
+      workspace,
+      model,
+      telemetryActive
+        ? { ticketId: ticket.id, phase: phase!, sessionId: sessionId!, startedAt: startedAt! }
+        : null,
+    );
     return;
   }
 
@@ -195,7 +229,27 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
   const projectFlag = projectContext
     ? ` --append-system-prompt "$(cat '${shellEscape(projectContext.tmpFile)}')"`
     : "";
-  const shellCmd = `${envPrefix}exec '${escapedClaude}' --dangerously-skip-permissions --model ${shellEscape(model)}${projectFlag} '${escapedPrompt}'`;
+  const sessionFlag = sessionId
+    ? ` --session-id '${shellEscape(sessionId)}'`
+    : "";
+  // AGT-108: drop the old `exec` here — `exec` would replace the shell with
+  // claude, leaving no way to run the telemetry record after claude exits.
+  // The post-step is `; oteam telemetry record …` (semicolon, not `&&`) so a
+  // non-zero claude exit still records. `$EC=$?` captures the original exit
+  // code so we can preserve it both into the record and as the wrapper's
+  // exit status.
+  const claudeCmd = `'${escapedClaude}' --dangerously-skip-permissions --model ${shellEscape(model)}${sessionFlag}${projectFlag} '${escapedPrompt}'`;
+  const telemetryTail = telemetryActive
+    ? buildTelemetryTail({
+        oteamPath: findToolOnPath("oteam") ?? "oteam",
+        ticketId: ticket.id,
+        phase: phase!,
+        model,
+        sessionId: sessionId!,
+        startedAt: startedAt!,
+      })
+    : "";
+  const shellCmd = `${envPrefix}${claudeCmd}${telemetryTail}`;
 
   const result = kittyLaunch({
     socket,
@@ -211,6 +265,37 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
   }
 }
 
+interface TelemetryHandle {
+  ticketId: string;
+  phase: string;
+  sessionId: string;
+  startedAt: string;
+}
+
+function buildTelemetryTail(input: {
+  oteamPath: string;
+  ticketId: string;
+  phase: string;
+  model: string;
+  sessionId: string;
+  startedAt: string;
+}): string {
+  // Best-effort per AC #4: redirect stdout/stderr of the record step to
+  // /dev/null so a record-side error never leaks into the kitty window.
+  // The record subcommand also stderrs internally; the redirect here is a
+  // belt-and-suspenders guard against an unexpected throw.
+  const oteam = `'${shellEscape(input.oteamPath)}'`;
+  const args = [
+    `--ticket '${shellEscape(input.ticketId)}'`,
+    `--phase '${shellEscape(input.phase)}'`,
+    `--model '${shellEscape(input.model)}'`,
+    `--session '${shellEscape(input.sessionId)}'`,
+    `--started-at '${shellEscape(input.startedAt)}'`,
+    `--exit-code "$EC"`,
+  ].join(" ");
+  return `; EC=$?; ${oteam} telemetry record ${args} >/dev/null 2>&1 || true; exit "$EC"`;
+}
+
 function runInline(
   claudePath: string,
   ticketPath: string,
@@ -218,6 +303,7 @@ function runInline(
   projectContext: ProjectContextHandle | null,
   workspace: PreparedWorkspace | null,
   model: string,
+  telemetry: TelemetryHandle | null,
 ): void {
   // Spawn claude in the current terminal with the slash command pre-typed,
   // inheriting stdio so the user can interact with the session normally.
@@ -227,6 +313,9 @@ function runInline(
     "--dangerously-skip-permissions",
     "--model", model,
   ];
+  if (telemetry) {
+    args.push("--session-id", telemetry.sessionId);
+  }
   if (projectContext) {
     // Inline path uses spawnSync's argv directly — no shell escaping needed,
     // and we can pass the prompt content rather than reading it from the tmp
@@ -236,6 +325,7 @@ function runInline(
   }
   args.push(`/assign-ticket ${ticketPath}`);
 
+  const cwd = workspace?.path ?? process.cwd();
   const r = spawnSync(
     claudePath,
     args,
@@ -245,6 +335,20 @@ function runInline(
       env: { ...process.env, PRODUCT_VAULT_PATH: vaultPath },
     },
   );
+  if (telemetry) {
+    // AGT-108: best-effort per AC #4 — recordPhase already wraps its own
+    // body in try/catch and writes any failure to stderr. The runner does
+    // not check the return value because there's nothing to fail over to.
+    recordPhase({
+      ticket: telemetry.ticketId,
+      phase: telemetry.phase,
+      model,
+      sessionId: telemetry.sessionId,
+      startedAt: telemetry.startedAt,
+      exitCode: r.status ?? -1,
+      cwd,
+    });
+  }
   if (r.status != null && r.status !== 0) process.exit(r.status);
 }
 

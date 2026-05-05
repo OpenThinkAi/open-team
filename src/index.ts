@@ -5,6 +5,7 @@ import { runArchive } from "./commands/archive.ts";
 import { buildConfigCommand } from "./commands/config.ts";
 import { buildInitCommand } from "./commands/init.ts";
 import { buildProjectCommand } from "./commands/project.ts";
+import { buildTelemetryCommand } from "./commands/telemetry.ts";
 import { buildTicketCommand } from "./commands/ticket.ts";
 import { assignTicket } from "./role-pipeline/runner.ts";
 import { TICKET_STATES } from "./lib/types.ts";
@@ -154,6 +155,7 @@ program
 program.addCommand(buildConfigCommand());
 program.addCommand(buildInitCommand());
 program.addCommand(buildProjectCommand());
+program.addCommand(buildTelemetryCommand());
 program.addCommand(buildTicketCommand());
 
 program.parseAsync(process.argv).catch((err: Error) => {
