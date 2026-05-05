@@ -5,7 +5,6 @@ import {
   summarize,
   tail,
   telemetryDir,
-  type RunsLine,
   type SummaryRow,
 } from "../lib/telemetry.ts";
 import type { TokenUsage } from "../lib/claude-session.ts";

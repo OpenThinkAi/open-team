@@ -39,11 +39,9 @@ export interface RecordPhaseInput {
   exitCode: number;
   /**
    * Working directory the spawn ran in. Used to resolve the session JSONL
-   * (`<claudeConfigDir>/projects/<encoded-cwd>/<sessionId>.jsonl`).
+   * (`$CLAUDE_CONFIG_DIR/projects/<encoded-cwd>/<sessionId>.jsonl`).
    */
   cwd: string;
-  /** Override `$CLAUDE_CONFIG_DIR` resolution (tests / non-default installs). */
-  claudeConfigDir?: string;
 }
 
 /**
@@ -75,9 +73,8 @@ export function recordPhase(input: RecordPhaseInput): void {
     const endedAt = input.endedAt ?? new Date().toISOString();
     const wallClockMs = computeWallClockMs(input.startedAt, endedAt);
 
-    const claudeConfigDir = resolveClaudeConfigDir(input.claudeConfigDir);
     const sessionFile = findSessionFile(
-      claudeConfigDir,
+      resolveClaudeConfigDir(),
       input.cwd,
       input.sessionId,
     );
@@ -118,8 +115,7 @@ export function recordPhase(input: RecordPhaseInput): void {
   }
 }
 
-function resolveClaudeConfigDir(override: string | undefined): string {
-  if (override && override.length > 0) return override;
+function resolveClaudeConfigDir(): string {
   const env = process.env.CLAUDE_CONFIG_DIR;
   if (env && env.length > 0) return env;
   return join(homedir(), ".claude");
@@ -169,8 +165,11 @@ export function summarize(
   filter: SummaryFilter = {},
 ): SummaryRow[] {
   const filtered = applyFilter(runs, filter);
-  // Bucket on a structured value (not a delimiter-joined key) so phases or
-  // model ids that contain whitespace don't collide on the round-trip.
+  // Bucket on a space-joined key. Phase is a fixed enum
+  // (product|spike|implementation|qa) and model ids are SDK-issued slugs;
+  // neither contains whitespace, so the join is unambiguous in practice.
+  // The structured-value bucket below preserves the original phase/model
+  // strings so the rendered row is not reconstructed from a split.
   type Bucket = { phase: string; model: string; rows: RunsLine[] };
   const buckets = new Map<string, Bucket>();
   for (const r of filtered) {
