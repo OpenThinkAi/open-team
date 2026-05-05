@@ -12,7 +12,15 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInit } from "../src/commands/init.ts";
-import { getStampConfig, listVaults } from "../src/lib/config.ts";
+import {
+  configDir,
+  configPath,
+  getModels,
+  getStampConfig,
+  listVaults,
+  setModel,
+} from "../src/lib/config.ts";
+import { DEFAULT_MODELS } from "../src/lib/models.ts";
 import { SENTINEL_FILENAME } from "../src/lib/workspace-tree.ts";
 
 let savedHome: string | undefined;
@@ -277,5 +285,69 @@ describe("oteam init — stamp prompts (AGT-096)", () => {
     const result = await init({ stampHost: "" });
     assert.equal(result.stamp.action, "unchanged");
     assert.equal(getStampConfig(), null);
+  });
+});
+
+describe("oteam init — default per-phase models (AGT-106)", () => {
+  it("AC #1: fresh init seeds DEFAULT_MODELS into the config", async () => {
+    const result = await runInit({ yes: true });
+    assert.equal(result.models.action, "seeded");
+    assert.deepEqual(result.models.models, DEFAULT_MODELS);
+    assert.deepEqual(getModels(), DEFAULT_MODELS);
+  });
+
+  it("AC #2: existing models block is preserved on re-init", async () => {
+    // First init seeds defaults; user then customises one phase.
+    await runInit({ yes: true });
+    setModel("spike", "claude-opus-4-6");
+    const userPick = getModels();
+
+    const result = await runInit({ yes: true });
+    assert.equal(result.models.action, "preserved");
+    assert.deepEqual(getModels(), userPick);
+  });
+
+  it("AC #2: a fully-customised block survives re-init verbatim", async () => {
+    await runInit({ yes: true });
+    setModel("product", "claude-haiku-4-5");
+    setModel("spike", "claude-opus-4-6");
+    setModel("implementation", "claude-haiku-4-5");
+    setModel("qa", "claude-haiku-4-5");
+    const customised = getModels();
+
+    const result = await runInit({ yes: true });
+    assert.equal(result.models.action, "preserved");
+    assert.deepEqual(getModels(), customised);
+  });
+
+  it("AC #3: existing config without a models block gets defaults written, other fields untouched", async () => {
+    // Pre-write a legacy-shaped config (vaults + stamp present, no models).
+    mkdirSync(configDir(), { recursive: true });
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        vaults: {},
+        default: null,
+        stamp: { host: "ssh://git@stamp.example.com:22000", enforce: true },
+      }),
+    );
+
+    const result = await runInit({ yes: true });
+    assert.equal(result.models.action, "seeded");
+    assert.deepEqual(getModels(), DEFAULT_MODELS);
+    // stamp must survive the write
+    assert.deepEqual(getStampConfig(), {
+      host: "ssh://git@stamp.example.com:22000",
+      enforce: true,
+    });
+  });
+
+  it("AC #6 idempotency: re-running on a freshly-seeded config does not rewrite", async () => {
+    await runInit({ yes: true });
+    const first = readFileSync(configPath(), "utf8");
+    const result = await runInit({ yes: true });
+    assert.equal(result.models.action, "preserved");
+    const second = readFileSync(configPath(), "utf8");
+    assert.equal(first, second);
   });
 });

@@ -6,7 +6,13 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, resolve, join } from "node:path";
-import { isPhase, PHASES, type ModelsConfig, type Phase } from "./models.ts";
+import {
+  DEFAULT_MODELS,
+  isPhase,
+  PHASES,
+  type ModelsConfig,
+  type Phase,
+} from "./models.ts";
 
 export interface StampConfig {
   /** Stamp server URL prefix, e.g. `ssh://git@host:port` (no trailing slash). */
@@ -345,6 +351,34 @@ export function setModel(phase: Phase, modelId: string): ModelsConfig {
   config.models = { ...config.models, [phase]: trimmed };
   writeConfig(config);
   return config.models;
+}
+
+export type SeedModelsAction = "seeded" | "preserved";
+
+export interface SeedModelsResult {
+  action: SeedModelsAction;
+  models: ModelsConfig;
+}
+
+/**
+ * Seed `DEFAULT_MODELS` into the on-disk config when `models` is empty;
+ * leave any existing block (even a single-phase one) untouched. Called by
+ * `oteam init` so a fresh user gets the Sonnet/Opus baseline without
+ * having to type four `oteam config models set` commands.
+ *
+ * "Empty" covers both shapes `normaliseModels` can produce: key absent in
+ * the JSON (legacy / never-set) and explicit `models: {}` (user cleared
+ * every override). Both deserve the defaults — anything non-empty is
+ * preserved verbatim per AC #2.
+ */
+export function seedDefaultModelsIfEmpty(): SeedModelsResult {
+  const config = readConfig();
+  if (Object.keys(config.models).length > 0) {
+    return { action: "preserved", models: config.models };
+  }
+  config.models = { ...DEFAULT_MODELS };
+  writeConfig(config);
+  return { action: "seeded", models: config.models };
 }
 
 export function clearModel(phase: Phase): ModelsConfig {
