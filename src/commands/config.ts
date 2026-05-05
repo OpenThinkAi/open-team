@@ -1,15 +1,19 @@
 import { Command } from "commander";
 import {
   addVault,
+  clearModel,
   clearStamp,
   configPath,
+  getModels,
   getStampConfig,
   listVaults,
   removeVault,
   setDefault,
+  setModel,
   setStampEnforce,
   setStampHost,
 } from "../lib/config.ts";
+import { isPhase, PHASES, type Phase } from "../lib/models.ts";
 
 export function buildConfigCommand(): Command {
   const config = new Command("config").description(
@@ -142,7 +146,53 @@ export function buildConfigCommand(): Command {
   stamp.addCommand(stampClear);
   stamp.addCommand(stampShow);
 
+  const models = new Command("models").description(
+    "Per-phase model overrides for the role pipeline (product|spike|implementation|qa)",
+  );
+
+  models
+    .command("set <phase> <model-id>")
+    .description(
+      `Pin a model id for one phase (phase: ${PHASES.join("|")})`,
+    )
+    .action((phaseRaw: string, modelId: string) => {
+      const phase = expectPhase(phaseRaw);
+      const next = setModel(phase, modelId);
+      process.stdout.write(
+        `✅ models.${phase} = ${next[phase]}\n`,
+      );
+    });
+
+  models
+    .command("clear <phase>")
+    .description("Remove the override for one phase (falls back to the role-pipeline default)")
+    .action((phaseRaw: string) => {
+      const phase = expectPhase(phaseRaw);
+      clearModel(phase);
+      process.stdout.write(`✅ models.${phase} cleared\n`);
+    });
+
+  models
+    .command("show")
+    .description("Print the current per-phase model overrides")
+    .action(() => {
+      const m = getModels();
+      const lines = PHASES.map((p) => `${p.padEnd(15)} ${m[p] ?? "(unset)"}`);
+      process.stdout.write(lines.join("\n") + "\n");
+    });
+
   config.addCommand(vault);
   config.addCommand(stamp);
+  config.addCommand(models);
   return config;
+}
+
+function expectPhase(value: string): Phase {
+  if (!isPhase(value)) {
+    process.stderr.write(
+      `oteam config models: unknown phase "${value}" — supported: ${PHASES.join(", ")}\n`,
+    );
+    process.exit(2);
+  }
+  return value;
 }

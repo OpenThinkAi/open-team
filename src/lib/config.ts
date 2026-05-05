@@ -6,6 +6,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, resolve, join } from "node:path";
+import { isPhase, PHASES, type ModelsConfig, type Phase } from "./models.ts";
 
 export interface StampConfig {
   /** Stamp server URL prefix, e.g. `ssh://git@host:port` (no trailing slash). */
@@ -19,6 +20,12 @@ export interface OteamConfig {
   default: string | null;
   /** Null/absent both mean "stamp integration is off". */
   stamp: StampConfig | null;
+  /**
+   * Per-phase model overrides for the role pipeline. Always an object;
+   * empty `{}` means "no overrides — every phase uses ROLE_PIPELINE_MODEL".
+   * Empty objects are omitted from the on-disk JSON to keep the file tidy.
+   */
+  models: ModelsConfig;
 }
 
 export interface ResolvedVault {
@@ -36,7 +43,7 @@ export function configPath(): string {
 
 export function readConfig(): OteamConfig {
   const path = configPath();
-  if (!existsSync(path)) return { vaults: {}, default: null, stamp: null };
+  if (!existsSync(path)) return emptyConfig();
   // existsSync already covers not-found; let real I/O errors (perms, etc.)
   // propagate so the user can fix them rather than silently falling back to
   // an empty config — which a subsequent writeConfig would then clobber.
@@ -53,8 +60,23 @@ export function readConfig(): OteamConfig {
 
 export function writeConfig(config: OteamConfig): void {
   mkdirSync(configDir(), { recursive: true });
-  const body = JSON.stringify(config, null, 2) + "\n";
+  // Strip empty `models` from the on-disk JSON so a fresh config that's
+  // never had a phase pinned doesn't accumulate noise. Round-trip is
+  // preserved because normalise() defaults a missing `models` key to `{}`.
+  const onDisk: Record<string, unknown> = {
+    vaults: config.vaults,
+    default: config.default,
+    stamp: config.stamp,
+  };
+  if (Object.keys(config.models).length > 0) {
+    onDisk.models = config.models;
+  }
+  const body = JSON.stringify(onDisk, null, 2) + "\n";
   writeFileSync(configPath(), body);
+}
+
+function emptyConfig(): OteamConfig {
+  return { vaults: {}, default: null, stamp: null, models: {} };
 }
 
 export interface AddVaultResult {
@@ -173,9 +195,14 @@ export function findVaultRootForPath(
 
 function normalise(parsed: unknown): OteamConfig {
   if (!parsed || typeof parsed !== "object") {
-    return { vaults: {}, default: null, stamp: null };
+    return emptyConfig();
   }
-  const obj = parsed as { vaults?: unknown; default?: unknown; stamp?: unknown };
+  const obj = parsed as {
+    vaults?: unknown;
+    default?: unknown;
+    stamp?: unknown;
+    models?: unknown;
+  };
   const vaults: Record<string, string> = {};
   if (obj.vaults && typeof obj.vaults === "object") {
     for (const [name, value] of Object.entries(obj.vaults as Record<string, unknown>)) {
@@ -186,7 +213,29 @@ function normalise(parsed: unknown): OteamConfig {
     typeof obj.default === "string" && obj.default in vaults
       ? obj.default
       : null;
-  return { vaults, default: def, stamp: normaliseStamp(obj.stamp) };
+  return {
+    vaults,
+    default: def,
+    stamp: normaliseStamp(obj.stamp),
+    models: normaliseModels(obj.models),
+  };
+}
+
+function normaliseModels(value: unknown): ModelsConfig {
+  // AC #2 / #3: tolerate absent / malformed shapes. Unknown phase keys are
+  // dropped; non-string or empty-string values are dropped. The end result
+  // is always a clean ModelsConfig where every present field is a known
+  // phase mapped to a non-empty string.
+  if (!value || typeof value !== "object") return {};
+  const out: ModelsConfig = {};
+  for (const [phase, modelId] of Object.entries(value as Record<string, unknown>)) {
+    if (!isPhase(phase)) continue;
+    if (typeof modelId !== "string") continue;
+    const trimmed = modelId.trim();
+    if (trimmed.length === 0) continue;
+    out[phase] = trimmed;
+  }
+  return out;
 }
 
 function normaliseStamp(value: unknown): StampConfig | null {
@@ -271,6 +320,47 @@ export function clearStamp(): void {
   const config = readConfig();
   config.stamp = null;
   writeConfig(config);
+}
+
+export function getModels(): ModelsConfig {
+  return readConfig().models;
+}
+
+export function setModel(phase: Phase, modelId: string): ModelsConfig {
+  const trimmed = modelId.trim();
+  // AC #3: validation surface is "non-empty string". Anything beyond that
+  // (does the SDK actually accept this id?) defers to the SDK itself, which
+  // surfaces a clear error at spawn time.
+  if (trimmed.length === 0) {
+    throw new Error(
+      `model id for phase "${phase}" cannot be empty — pass a non-empty string`,
+    );
+  }
+  if (!isPhase(phase)) {
+    throw new Error(
+      `unknown phase "${phase}" — supported: ${PHASES.join(", ")}`,
+    );
+  }
+  const config = readConfig();
+  config.models = { ...config.models, [phase]: trimmed };
+  writeConfig(config);
+  return config.models;
+}
+
+export function clearModel(phase: Phase): ModelsConfig {
+  if (!isPhase(phase)) {
+    throw new Error(
+      `unknown phase "${phase}" — supported: ${PHASES.join(", ")}`,
+    );
+  }
+  const config = readConfig();
+  if (phase in config.models) {
+    const next = { ...config.models };
+    delete next[phase];
+    config.models = next;
+    writeConfig(config);
+  }
+  return config.models;
 }
 
 function findEntry(config: OteamConfig, nameOrPath: string): string | null {

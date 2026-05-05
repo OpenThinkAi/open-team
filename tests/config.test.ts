@@ -230,7 +230,7 @@ describe("config: malformed config file", () => {
 describe("config: empty state", () => {
   it("readConfig returns empty when the file does not exist", async () => {
     const r = cfg.readConfig();
-    assert.deepEqual(r, { vaults: {}, default: null, stamp: null });
+    assert.deepEqual(r, { vaults: {}, default: null, stamp: null, models: {} });
     assert.ok(!existsSync(cfg.configPath()));
   });
 });
@@ -344,5 +344,113 @@ describe("config: stamp helpers (AC #5)", () => {
     assert.equal(persisted.vaults.personal, vaultDir);
     assert.equal(persisted.default, "personal");
     assert.equal(persisted.stamp.host, "ssh://git@x:1");
+  });
+});
+
+describe("config: per-phase models (AGT-105)", () => {
+  it("setModel persists a single phase override and getModels reads it back", () => {
+    cfg.setModel("product", "claude-haiku-4-5");
+    assert.deepEqual(cfg.getModels(), { product: "claude-haiku-4-5" });
+  });
+
+  it("each phase resolves independently — pinning one does not affect others", () => {
+    cfg.setModel("spike", "claude-opus-4-7");
+    cfg.setModel("qa", "claude-sonnet-4-6");
+    assert.deepEqual(cfg.getModels(), {
+      spike: "claude-opus-4-7",
+      qa: "claude-sonnet-4-6",
+    });
+  });
+
+  it("setModel rejects empty / whitespace-only model ids (AC #3)", () => {
+    assert.throws(() => cfg.setModel("product", ""), /cannot be empty/);
+    assert.throws(() => cfg.setModel("product", "   "), /cannot be empty/);
+  });
+
+  it("setModel trims surrounding whitespace from the model id", () => {
+    cfg.setModel("product", "  claude-haiku-4-5  ");
+    assert.deepEqual(cfg.getModels(), { product: "claude-haiku-4-5" });
+  });
+
+  it("clearModel removes one phase but leaves the others intact", () => {
+    cfg.setModel("spike", "claude-opus-4-7");
+    cfg.setModel("qa", "claude-sonnet-4-6");
+    const after = cfg.clearModel("spike");
+    assert.deepEqual(after, { qa: "claude-sonnet-4-6" });
+    assert.deepEqual(cfg.getModels(), { qa: "claude-sonnet-4-6" });
+  });
+
+  it("clearModel on an unset phase is a no-op", () => {
+    cfg.setModel("qa", "claude-sonnet-4-6");
+    const after = cfg.clearModel("product");
+    assert.deepEqual(after, { qa: "claude-sonnet-4-6" });
+  });
+
+  it("setModel rewrites in place when the same phase is set twice", () => {
+    cfg.setModel("product", "claude-haiku-4-5");
+    cfg.setModel("product", "claude-sonnet-4-6");
+    assert.deepEqual(cfg.getModels(), { product: "claude-sonnet-4-6" });
+  });
+
+  it("empty models block is omitted from the on-disk JSON (clean default)", () => {
+    cfg.setStampHost("ssh://git@x:1");
+    cfg.setModel("product", "claude-haiku-4-5");
+    cfg.clearModel("product");
+    const persisted = JSON.parse(readFileSync(cfg.configPath(), "utf8"));
+    assert.equal(persisted.models, undefined);
+  });
+
+  it("on-disk JSON contains only the set phases (AC #1 shape)", () => {
+    cfg.setModel("product", "claude-haiku-4-5");
+    cfg.setModel("spike", "claude-opus-4-7");
+    const persisted = JSON.parse(readFileSync(cfg.configPath(), "utf8"));
+    assert.deepEqual(persisted.models, {
+      product: "claude-haiku-4-5",
+      spike: "claude-opus-4-7",
+    });
+  });
+
+  it("normalise drops unknown phase keys and non-string values", () => {
+    mkdirSync(cfg.configDir(), { recursive: true });
+    writeFileSync(
+      cfg.configPath(),
+      JSON.stringify({
+        vaults: {},
+        default: null,
+        models: {
+          product: "claude-haiku-4-5",
+          bogus: "ignored",
+          spike: 42,
+          qa: "",
+          implementation: "claude-sonnet-4-6",
+        },
+      }),
+    );
+    assert.deepEqual(cfg.readConfig().models, {
+      product: "claude-haiku-4-5",
+      implementation: "claude-sonnet-4-6",
+    });
+  });
+
+  it("missing models key normalises to {} (legacy config compat)", () => {
+    mkdirSync(cfg.configDir(), { recursive: true });
+    writeFileSync(
+      cfg.configPath(),
+      JSON.stringify({ vaults: {}, default: null }),
+    );
+    assert.deepEqual(cfg.readConfig().models, {});
+  });
+
+  it("setModel preserves vaults + default + stamp (config round-trip)", () => {
+    const vaultDir = join(fakeHome, "v");
+    mkdirSync(vaultDir);
+    cfg.addVault(vaultDir, { name: "personal" });
+    cfg.setStampHost("ssh://git@x:1");
+    cfg.setModel("spike", "claude-opus-4-7");
+    const persisted = JSON.parse(readFileSync(cfg.configPath(), "utf8"));
+    assert.equal(persisted.vaults.personal, vaultDir);
+    assert.equal(persisted.default, "personal");
+    assert.equal(persisted.stamp.host, "ssh://git@x:1");
+    assert.equal(persisted.models.spike, "claude-opus-4-7");
   });
 });

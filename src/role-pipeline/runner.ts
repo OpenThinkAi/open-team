@@ -16,7 +16,7 @@ import {
   preferredKittyContext,
   shellEscape,
 } from "../lib/kitty.ts";
-import { ROLE_PIPELINE_MODEL } from "../lib/models.ts";
+import { resolveRoleModel } from "../lib/models.ts";
 import {
   formatProjectContextForPrompt,
   projectDir,
@@ -147,10 +147,15 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
   // of bubbling them up to the human as a "gap."
   const projectContext = loadProjectContext(resolvedVault.path, ticket.project);
 
+  // AGT-105: pick the per-phase model from oteam config based on the
+  // ticket's current state. Each `oteam assign` spawn drives one phase, so
+  // resolving once here covers both the kitty and inline spawn shapes.
+  const model = resolveRoleModel(ticket.state, config.models);
+
   const kittyPath =
     !opts.workInline && isMacOS() ? findKittyBinary() : null;
   if (!kittyPath) {
-    runInline(claudePath, ticketPath, resolvedVault.path, projectContext, workspace);
+    runInline(claudePath, ticketPath, resolvedVault.path, projectContext, workspace, model);
     return;
   }
 
@@ -161,7 +166,7 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
     process.stderr.write(
       `oteam assign: no kitty socket reachable (preferring "${preferring}"); falling back to inline run.\n`,
     );
-    runInline(claudePath, ticketPath, resolvedVault.path, projectContext, workspace);
+    runInline(claudePath, ticketPath, resolvedVault.path, projectContext, workspace, model);
     return;
   }
 
@@ -190,7 +195,7 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
   const projectFlag = projectContext
     ? ` --append-system-prompt "$(cat '${shellEscape(projectContext.tmpFile)}')"`
     : "";
-  const shellCmd = `${envPrefix}exec '${escapedClaude}' --dangerously-skip-permissions --model ${ROLE_PIPELINE_MODEL}${projectFlag} '${escapedPrompt}'`;
+  const shellCmd = `${envPrefix}exec '${escapedClaude}' --dangerously-skip-permissions --model ${shellEscape(model)}${projectFlag} '${escapedPrompt}'`;
 
   const result = kittyLaunch({
     socket,
@@ -212,6 +217,7 @@ function runInline(
   vaultPath: string,
   projectContext: ProjectContextHandle | null,
   workspace: PreparedWorkspace | null,
+  model: string,
 ): void {
   // Spawn claude in the current terminal with the slash command pre-typed,
   // inheriting stdio so the user can interact with the session normally.
@@ -219,7 +225,7 @@ function runInline(
   // `oteam pull/list/...` calls land in the same vault.
   const args: string[] = [
     "--dangerously-skip-permissions",
-    "--model", ROLE_PIPELINE_MODEL,
+    "--model", model,
   ];
   if (projectContext) {
     // Inline path uses spawnSync's argv directly — no shell escaping needed,
