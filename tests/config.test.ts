@@ -454,3 +454,78 @@ describe("config: per-phase models (AGT-105)", () => {
     assert.equal(persisted.models.spike, "claude-opus-4-7");
   });
 });
+
+describe("config: seedDefaultModelsIfEmpty (AGT-106)", () => {
+  it("writes DEFAULT_MODELS into a fresh config (AC #1/#3)", async () => {
+    const { DEFAULT_MODELS } = await import("../src/lib/models.ts");
+    const result = cfg.seedDefaultModelsIfEmpty();
+    assert.equal(result.action, "seeded");
+    assert.deepEqual(result.models, DEFAULT_MODELS);
+    assert.deepEqual(cfg.getModels(), DEFAULT_MODELS);
+  });
+
+  it("preserves a non-empty single-phase models block (AC #2)", () => {
+    cfg.setModel("spike", "claude-opus-4-7");
+    const result = cfg.seedDefaultModelsIfEmpty();
+    assert.equal(result.action, "preserved");
+    assert.deepEqual(result.models, { spike: "claude-opus-4-7" });
+    assert.deepEqual(cfg.getModels(), { spike: "claude-opus-4-7" });
+  });
+
+  it("preserves a non-empty fully-customised models block (AC #2)", () => {
+    cfg.setModel("product", "claude-haiku-4-5");
+    cfg.setModel("spike", "claude-opus-4-6");
+    cfg.setModel("implementation", "claude-haiku-4-5");
+    cfg.setModel("qa", "claude-haiku-4-5");
+    const before = cfg.getModels();
+    const result = cfg.seedDefaultModelsIfEmpty();
+    assert.equal(result.action, "preserved");
+    assert.deepEqual(cfg.getModels(), before);
+  });
+
+  it("seeds when an existing config has no models key at all (AC #3)", async () => {
+    // Simulate a legacy config: vaults + stamp, no models field.
+    mkdirSync(cfg.configDir(), { recursive: true });
+    writeFileSync(
+      cfg.configPath(),
+      JSON.stringify({ vaults: {}, default: null, stamp: null }),
+    );
+    const { DEFAULT_MODELS } = await import("../src/lib/models.ts");
+    const result = cfg.seedDefaultModelsIfEmpty();
+    assert.equal(result.action, "seeded");
+    assert.deepEqual(cfg.getModels(), DEFAULT_MODELS);
+  });
+
+  it("seeds when an existing config has an explicit empty models block", async () => {
+    mkdirSync(cfg.configDir(), { recursive: true });
+    writeFileSync(
+      cfg.configPath(),
+      JSON.stringify({ vaults: {}, default: null, stamp: null, models: {} }),
+    );
+    const { DEFAULT_MODELS } = await import("../src/lib/models.ts");
+    const result = cfg.seedDefaultModelsIfEmpty();
+    assert.equal(result.action, "seeded");
+    assert.deepEqual(cfg.getModels(), DEFAULT_MODELS);
+  });
+
+  it("idempotency: a second call after seeding preserves the seed", async () => {
+    const { DEFAULT_MODELS } = await import("../src/lib/models.ts");
+    cfg.seedDefaultModelsIfEmpty();
+    const second = cfg.seedDefaultModelsIfEmpty();
+    assert.equal(second.action, "preserved");
+    assert.deepEqual(cfg.getModels(), DEFAULT_MODELS);
+  });
+
+  it("preserves vaults + default + stamp when seeding", () => {
+    const vaultDir = join(fakeHome, "v");
+    mkdirSync(vaultDir);
+    cfg.addVault(vaultDir, { name: "personal" });
+    cfg.setStampHost("ssh://git@x:1");
+    cfg.seedDefaultModelsIfEmpty();
+    const persisted = JSON.parse(readFileSync(cfg.configPath(), "utf8"));
+    assert.equal(persisted.vaults.personal, vaultDir);
+    assert.equal(persisted.default, "personal");
+    assert.equal(persisted.stamp.host, "ssh://git@x:1");
+    assert.equal(persisted.models.spike, "claude-opus-4-7");
+  });
+});

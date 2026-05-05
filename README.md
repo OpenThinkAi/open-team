@@ -30,7 +30,7 @@ npm link
 oteam init
 ```
 
-Creates `~/openteam/` with the workspace tree below, drops a `.oteam-workspace` sentinel, registers it in `~/.open-team/config.json` (promoting it to default if no default is set), and writes the oteam guidance block to `~/AGENTS.md` and `~/CLAUDE.md`. Re-running `oteam init` against an already-initialised path is a clean no-op; running against a non-empty unmarked directory exits non-zero rather than silently merging.
+Creates `~/openteam/` with the workspace tree below, drops a `.oteam-workspace` sentinel, registers it in `~/.open-team/config.json` (promoting it to default if no default is set), seeds per-phase model defaults (see [Per-phase model selection](#per-phase-model-selection) for the table), and writes the oteam guidance block to `~/AGENTS.md` and `~/CLAUDE.md`. Re-running `oteam init` against an already-initialised path is a clean no-op; running against a non-empty unmarked directory exits non-zero rather than silently merging. Existing per-phase model customisation is preserved across re-runs — defaults are only seeded when the `models` block is absent or empty (run `oteam config models show` to see the current state).
 
 Flags:
 
@@ -170,7 +170,16 @@ Each role-pipeline phase can run on a different Claude model. The runner reads `
 | `in-progress`  | `implementation` |
 | `qa`           | `qa`             |
 
-Set per-phase overrides with the new CLI:
+`oteam init` seeds these defaults if no `models` block exists yet:
+
+| phase            | default model        | rationale                                                       |
+|------------------|----------------------|-----------------------------------------------------------------|
+| `product`        | `claude-sonnet-4-6`  | synthesis when the input is rough; cheaper than Opus            |
+| `spike`          | `claude-opus-4-7`    | design judgment, gap-spotting, scope rating                     |
+| `implementation` | `claude-sonnet-4-6`  | multi-file edits + stamp round-trips                            |
+| `qa`             | `claude-sonnet-4-6`  | catching AC mismatches against the running system               |
+
+Inspect the current state with `oteam config models show`. Override with:
 
 ```sh
 oteam config models set spike claude-opus-4-7
@@ -179,7 +188,7 @@ oteam config models show         # one phase per line; "(unset)" for unpinned ph
 oteam config models clear spike  # falls back to the role-pipeline default
 ```
 
-Each field is independent. Unset phases fall back to the role-pipeline default (currently `claude-opus-4-7`); validation is "non-empty string", and the SDK rejects unknown ids at spawn time. `oteam init` does not seed defaults — that's a separate ticket. A spike that auto-proceeds to implementation in the same session keeps the spike-phase model (one model per spawn).
+Each field is independent. Unset phases fall back to the role-pipeline default (currently `claude-opus-4-7`); validation is "non-empty string", and the SDK rejects unknown ids at spawn time. Re-running `oteam init` against a config that already has any per-phase model set leaves the entire `models` block alone — your customisation wins. A spike that auto-proceeds to implementation in the same session keeps the spike-phase model (one model per spawn).
 
 ## Config & multiple vaults
 

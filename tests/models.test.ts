@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  DEFAULT_MODELS,
   isPhase,
   PHASES,
   phaseForState,
@@ -39,6 +40,24 @@ describe("models: isPhase", () => {
     assert.equal(isPhase(""), false);
     assert.equal(isPhase("triage"), false); // state, not phase
     assert.equal(isPhase("Product"), false); // case-sensitive
+  });
+});
+
+describe("models: DEFAULT_MODELS (AGT-106)", () => {
+  it("covers every phase exactly once with non-empty model ids", () => {
+    const keys = Object.keys(DEFAULT_MODELS).sort();
+    assert.deepEqual(keys, [...PHASES].sort());
+    for (const phase of PHASES) {
+      assert.equal(typeof DEFAULT_MODELS[phase], "string");
+      assert.ok(DEFAULT_MODELS[phase].length > 0);
+    }
+  });
+
+  it("matches the AGT-106 baseline: Sonnet/Opus/Sonnet/Sonnet", () => {
+    assert.equal(DEFAULT_MODELS.product, "claude-sonnet-4-6");
+    assert.equal(DEFAULT_MODELS.spike, "claude-opus-4-7");
+    assert.equal(DEFAULT_MODELS.implementation, "claude-sonnet-4-6");
+    assert.equal(DEFAULT_MODELS.qa, "claude-sonnet-4-6");
   });
 });
 

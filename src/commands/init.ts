@@ -6,9 +6,12 @@ import {
   addVault,
   getStampConfig,
   listVaults,
+  seedDefaultModelsIfEmpty,
   setStamp,
+  type SeedModelsResult,
   type StampConfig,
 } from "../lib/config.ts";
+import type { ModelsConfig } from "../lib/models.ts";
 import {
   bootstrapWorkspace,
   defaultWorkspacePath,
@@ -166,6 +169,7 @@ export interface RunInitResult {
   agents: { path: string; result: UpsertResult };
   claude: { path: string; result: UpsertResult };
   stamp: StampInitOutcome;
+  models: SeedModelsResult;
 }
 
 export async function runInit(opts: RunInitOptions): Promise<RunInitResult> {
@@ -196,6 +200,12 @@ export async function runInit(opts: RunInitOptions): Promise<RunInitResult> {
   const registration = addVault(bootstrap.path);
   const currentDefault = listVaults().default;
 
+  // Seed per-phase model defaults before the stamp step so the stdout
+  // ordering (workspace → models → stamp → docs) matches the order users
+  // think about config layers. Non-empty `models` blocks (any partial
+  // user customisation) are preserved per AC #2.
+  const models = seedDefaultModelsIfEmpty();
+
   const stamp = await runStampStep(opts);
 
   const docsDir = resolve(expandHome(opts.docsDir ?? home));
@@ -221,6 +231,7 @@ export async function runInit(opts: RunInitOptions): Promise<RunInitResult> {
     agents: { path: agentsPath, result: agents },
     claude: { path: claudePath, result: claude },
     stamp,
+    models,
   };
 }
 
@@ -293,6 +304,19 @@ async function runStampStep(opts: RunInitOptions): Promise<StampInitOutcome> {
   // both fields are written together).
   const result = setStamp({ host: nextHost, enforce });
   return { action: "set", stamp: result };
+}
+
+function modelsLine(result: SeedModelsResult): string {
+  if (result.action === "preserved") {
+    return "ℹ️  Models: existing customisation preserved";
+  }
+  return `✅ Models: defaults seeded (${formatModels(result.models)})`;
+}
+
+function formatModels(models: ModelsConfig): string {
+  return (["product", "spike", "implementation", "qa"] as const)
+    .map((phase) => `${phase}=${models[phase]}`)
+    .join(", ");
 }
 
 function stampLine(outcome: StampInitOutcome): string | null {
@@ -371,6 +395,7 @@ export function buildInitCommand(): Command {
       process.stdout.write(
         `✅ ${pastTense(result.claude.result)} ${result.claude.path}\n`,
       );
+      process.stdout.write(`${modelsLine(result.models)}\n`);
       const stampMsg = stampLine(result.stamp);
       if (stampMsg) process.stdout.write(`${stampMsg}\n`);
     });
