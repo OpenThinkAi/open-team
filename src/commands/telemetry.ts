@@ -12,7 +12,7 @@ import type { TokenUsage } from "../lib/claude-session.ts";
 
 export function buildTelemetryCommand(): Command {
   const telemetry = new Command("telemetry").description(
-    "Per-phase wall-clock + token telemetry for role-pipeline spawns (AGT-108)",
+    "Per-phase wall-clock + token telemetry for role-pipeline spawns",
   );
 
   telemetry

@@ -235,7 +235,7 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
   // AGT-108: drop the old `exec` here — `exec` would replace the shell with
   // claude, leaving no way to run the telemetry record after claude exits.
   // The post-step is `; oteam telemetry record …` (semicolon, not `&&`) so a
-  // non-zero claude exit still records. `$EC=$?` captures the original exit
+  // non-zero claude exit still records. `EC=$?` captures the original exit
   // code so we can preserve it both into the record and as the wrapper's
   // exit status.
   const claudeCmd = `'${escapedClaude}' --dangerously-skip-permissions --model ${shellEscape(model)}${sessionFlag}${projectFlag} '${escapedPrompt}'`;
