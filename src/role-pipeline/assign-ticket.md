@@ -159,10 +159,27 @@ If you skipped Phase 3 Step 0 (vault-only spike that turned out to need code cha
 
 Read `CLAUDE.md`, `AGENTS.md`, `README.md` at the repo root if present.
 
-**2. Verify the worktree shape.** Run `git remote -v` and confirm one of two shapes:
+**2. Verify the worktree shape and compute the merge mode.** Run `git remote -v` and check whether `.stamp/` exists in the worktree. Three shapes are valid:
 
-- **Stamp-governed (default).** Exactly one remote, `origin`, pointing at `ssh://git@<stamp-host>:<port>/srv/git/<basename>.git`. The runner clones with that shape on purpose; no rename / re-add is required, and adding a `github` remote here would defeat the AGT-050 invariant. Continue to Step 3 and use the stamp-protected branch (5a) at the end of Step 5.
-- **`--no-stamp` run.** Exactly one remote, `origin`, pointing at `git@github.com:<owner>/<repo>.git`. Continue to Step 3 and route through the plain-GitHub branch (5b) at the end of Step 5 — `git push origin <feature>` + `gh pr create`. The stamp commands (`stamp review`, `stamp merge`, `stamp push`) must not be invoked in this branch even if `.stamp/` exists in the worktree, because there's nowhere to push the stamp-signed merge.
+- **Stamp-governed (default).** Exactly one remote, `origin`, pointing at `ssh://git@<stamp-host>:<port>/srv/git/<basename>.git`. The runner clones with that shape on purpose; no rename / re-add is required, and adding a `github` remote here would defeat the AGT-050 invariant. `MODE` will resolve to `stamp` and routing goes through the stamp-protected branch (5a) at the end of Step 5.
+- **Local-stamp.** `origin` points at `git@github.com:<owner>/<repo>.git` AND the worktree contains a `.stamp/` directory. The repo carries stamp config but no stamp server is in use (typically a `--no-stamp` run against a stamp-aware repo). `MODE` will resolve to `local-stamp` and routing goes through 5c — `stamp review` + `stamp merge` produce a signed merge commit locally, which is then pushed to GitHub as the PR head for human review. `stamp push` is intentionally not invoked (no stamp server); `stamp verify <merge-sha>` still works against the PR head from any clone with the trusted public keys.
+- **Plain GitHub.** `origin` points at `git@github.com:<owner>/<repo>.git` and there is no `.stamp/` directory. `MODE` will resolve to `plain` and routing goes through 5b — `git push origin <feature>` + `gh pr create`.
+
+Compute `MODE` once, here, from the worktree's actual state — every subsequent step branches on this single variable:
+
+```sh
+ORIGIN_URL=$(git remote get-url origin)
+if [ -d .stamp ]; then
+    case "$ORIGIN_URL" in
+        *github.com*) MODE=local-stamp ;;
+        *)            MODE=stamp ;;
+    esac
+else
+    MODE=plain
+fi
+```
+
+If `MODE` doesn't match what you expected from `git remote -v` and the visible `.stamp/` state, stop and surface — the worktree was cloned from an unexpected remote or `.stamp/` was added/removed mid-flight.
 
 **3. Determine base branch + cut feature branch.**
 
@@ -177,6 +194,17 @@ git fetch origin "$BASE_BRANCH":"$BASE_BRANCH" 2>/dev/null || git fetch origin "
 git checkout "$BASE_BRANCH"
 FEATURE_BRANCH="agt/$(echo "$TICKET_ID" | tr '[:upper:]' '[:lower:]')"
 git checkout -b "$FEATURE_BRANCH"
+
+# Local-stamp only: cut a work branch off the feature branch so commits in
+# Step 4 land on $WORK_BRANCH and Step 5c can stamp-merge $WORK_BRANCH into
+# $FEATURE_BRANCH locally — the resulting signed merge commit becomes the
+# PR head. In other modes WORK_BRANCH == FEATURE_BRANCH (no extra checkout).
+if [ "$MODE" = "local-stamp" ]; then
+    WORK_BRANCH="${FEATURE_BRANCH}-work"
+    git checkout -b "$WORK_BRANCH"
+else
+    WORK_BRANCH="$FEATURE_BRANCH"
+fi
 ```
 
 Branch name: `agt/<ticket-id-lowercased>` (e.g. `agt/agt-003`). Vault ticket IDs are the canonical key — Linear identifiers are no longer minted in this flow (Linear-as-publish-target is a separate downstream sync, filed as its own follow-up ticket).
@@ -199,13 +227,13 @@ When tests pass:
 ```sh
 git add -A
 COMMIT_BODY="Refs <ticket-id>"
-# Plain-GitHub path only: append a `Fixes <gh-issue-url>` trailer so the
-# eventual GH merge auto-closes the issue. The stamp-governed path skips
-# this trailer — those worktrees have no github remote, the merge gets
-# pushed to the stamp server, and GH never sees a commit that would
-# trigger auto-close. QA Phase 5 closes the GH issue explicitly via
-# `gh issue close`, so behaviour is preserved either way.
-if [ "<source.type>" = "github" ] && [ ! -d .stamp ]; then
+# GitHub-bound paths (plain, local-stamp): append a `Fixes <gh-issue-url>`
+# trailer so the eventual PR merge auto-closes the GH issue. The
+# stamp-governed path skips this trailer — those worktrees have no github
+# remote, the merge gets pushed to the stamp server, and GH never sees a
+# commit that would trigger auto-close. QA Phase 5 closes the GH issue
+# explicitly via `gh issue close`, so behaviour is preserved either way.
+if [ "<source.type>" = "github" ] && [ "$MODE" != "stamp" ]; then
     COMMIT_BODY="$COMMIT_BODY"$'\n'"Fixes <linked-github URL>"
 fi
 git commit -m "<one-line summary>
@@ -216,11 +244,7 @@ $COMMIT_BODY
 
 Never use `--no-verify`. Fix hook failures at the root cause.
 
-**5. Detect repo type and route.**
-
-```sh
-test -d .stamp && REPO_KIND=stamp || REPO_KIND=plain
-```
+**5. Route by `$MODE`** (set in Step 2): `stamp` → 5a, `plain` → 5b, `local-stamp` → 5c.
 
 #### 5a — Stamp-protected repo
 
@@ -256,6 +280,31 @@ gh pr create --fill
 ```
 
 Capture the PR URL into `linked-pr:`. Human merges through GitHub PR review.
+
+#### 5c — Local-stamp repo (`.stamp/` present, GitHub origin)
+
+Run review on `$WORK_BRANCH` against `$FEATURE_BRANCH` (the eventual PR base):
+
+```sh
+stamp review --diff "$FEATURE_BRANCH..$WORK_BRANCH"
+stamp status --diff "$FEATURE_BRANCH..$WORK_BRANCH"
+```
+
+If the gate isn't open, iterate per the **5-round rule** (same shape as 5a — round 1 structure, round 2 consistency, round 3 polish; later rounds rare). Amend on `$WORK_BRANCH` between rounds. After 5 rounds still red → STOP with `🛑 BLOCKED — Local stamp review red after 5 rounds`.
+
+When the gate opens, merge locally and push the signed merge as the PR head:
+
+```sh
+git checkout "$FEATURE_BRANCH"
+stamp merge "$WORK_BRANCH" --into "$FEATURE_BRANCH"
+git push -u origin "$FEATURE_BRANCH"
+gh pr create --base "$DEFAULT_BRANCH" --head "$FEATURE_BRANCH" --fill
+git branch -D "$WORK_BRANCH"
+```
+
+`stamp push` is intentionally absent — there is no stamp server. The signed merge commit is the PR head; reviewers can `stamp verify <pr-head-sha>` from any clone whose `.stamp/trusted-keys/` contains the signing key. Capture the PR URL into `linked-pr:`. Human merges through GitHub PR review. Never merge a GitHub PR yourself.
+
+Local-stamp is single-tier only — the PR base is always `$DEFAULT_BRANCH`. Two-tier (stacked-base) flows require a stamp server to hold the intermediate base branch and aren't supported in this mode.
 
 ### Phase 4.5 — Release follow-up (single-tier stamp only)
 
