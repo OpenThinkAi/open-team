@@ -75,6 +75,9 @@ oteam config stamp set --host <url>   # configure stamp host post-init
 oteam config stamp set --enforce on   # require repos be stamp-registered
 oteam config stamp clear              # remove the stamp block
 oteam config stamp show               # print current stamp config
+oteam config models set <phase> <id>  # pin a model per role-pipeline phase
+oteam config models clear <phase>     # remove a per-phase override
+oteam config models show              # print current per-phase overrides
 ```
 
 Most commands accept `--vault <name-or-path>` to operate on a specific vault.
@@ -155,6 +158,28 @@ oteam config stamp clear              # remove the stamp block entirely
 > **Migration note.** Earlier `oteam` builds read `~/.stamp/server.yml` directly. This version does not — to keep the AGT-050 stamp gate in place after upgrade, run `oteam init` and paste the host (or `oteam config stamp set --host <url> --enforce on`).
 
 Stale workspaces from prior assigns are GC'd at spawn time: any `/tmp/open-team-issues/agt-N/` directory whose ticket id has no matching ticket in the active vault is `rm -rf`'d before the new clone. The current run's workspace is also `rm -rf`'d before its clone, so re-assigns are hermetic.
+
+## Per-phase model selection
+
+Each role-pipeline phase can run on a different Claude model. The runner reads `models[phase]` from `~/.open-team/config.json` before each spawn and passes it as `claude --model <id>`. Phase resolution from the ticket's `state:`:
+
+| ticket state   | phase            |
+|----------------|------------------|
+| `triage`       | `product`        |
+| `refined`      | `spike`          |
+| `in-progress`  | `implementation` |
+| `qa`           | `qa`             |
+
+Set per-phase overrides with the new CLI:
+
+```sh
+oteam config models set spike claude-opus-4-7
+oteam config models set implementation claude-sonnet-4-6
+oteam config models show         # product=(unset) spike=claude-opus-4-7 ...
+oteam config models clear spike  # falls back to the role-pipeline default
+```
+
+Each field is independent. Unset phases fall back to the role-pipeline default (currently `claude-opus-4-7`); validation is "non-empty string", and the SDK rejects unknown ids at spawn time. `oteam init` does not seed defaults — that's a separate ticket. A spike that auto-proceeds to implementation in the same session keeps the spike-phase model (one model per spawn).
 
 ## Config & multiple vaults
 
