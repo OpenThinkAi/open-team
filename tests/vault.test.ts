@@ -193,6 +193,7 @@ describe("resolveVault precedence", () => {
       default: "d",
       stamp: null,
       models: {},
+      productDownshift: true,
       telemetry: { enabled: true },
     };
     process.env.PRODUCT_VAULT_PATH = envPath;
@@ -217,7 +218,7 @@ describe("resolveVault precedence", () => {
     );
 
     assert.equal(
-      resolveVault({ config: { vaults: {}, default: null, stamp: null, models: {}, telemetry: { enabled: true } } }).name,
+      resolveVault({ config: { vaults: {}, default: null, stamp: null, models: {}, productDownshift: true, telemetry: { enabled: true } } }).name,
       "(implicit)",
       "implicit fallback when nothing configured",
     );
@@ -226,7 +227,7 @@ describe("resolveVault precedence", () => {
   it("flag accepts an absolute path that's not registered", () => {
     const r = resolveVault({
       flagValue: "/absolute/somewhere",
-      config: { vaults: {}, default: null, stamp: null, models: {}, telemetry: { enabled: true } },
+      config: { vaults: {}, default: null, stamp: null, models: {}, productDownshift: true, telemetry: { enabled: true } },
     });
     assert.equal(r.path, "/absolute/somewhere");
   });
@@ -236,7 +237,7 @@ describe("resolveVault precedence", () => {
       () =>
         resolveVault({
           flagValue: "ghost",
-          config: { vaults: {}, default: null, stamp: null, models: {}, telemetry: { enabled: true } },
+          config: { vaults: {}, default: null, stamp: null, models: {}, productDownshift: true, telemetry: { enabled: true } },
         }),
       /not a registered name and not a path/,
     );

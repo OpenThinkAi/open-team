@@ -236,6 +236,7 @@ describe("config: empty state", () => {
       default: null,
       stamp: null,
       models: {},
+      productDownshift: true,
       telemetry: { enabled: true },
     });
     assert.ok(!existsSync(cfg.configPath()));
@@ -530,5 +531,128 @@ describe("config: seedDefaultModelsIfEmpty (AGT-106)", () => {
     assert.equal(persisted.default, "personal");
     assert.equal(persisted.stamp.host, "ssh://git@x:1");
     assert.equal(persisted.models.spike, "claude-opus-4-7");
+  });
+});
+
+describe("config: productDownshift (AGT-107)", () => {
+  it("defaults to true when the key is absent on disk", () => {
+    mkdirSync(cfg.configDir(), { recursive: true });
+    writeFileSync(
+      cfg.configPath(),
+      JSON.stringify({ vaults: {}, default: null }),
+    );
+    assert.equal(cfg.readConfig().productDownshift, true);
+    assert.equal(cfg.getProductDownshift(), true);
+  });
+
+  it("defaults to true when models block is absent", () => {
+    mkdirSync(cfg.configDir(), { recursive: true });
+    writeFileSync(
+      cfg.configPath(),
+      JSON.stringify({ vaults: {}, default: null, stamp: null }),
+    );
+    assert.equal(cfg.readConfig().productDownshift, true);
+  });
+
+  it("explicit models.productDownshift: false round-trips", () => {
+    mkdirSync(cfg.configDir(), { recursive: true });
+    writeFileSync(
+      cfg.configPath(),
+      JSON.stringify({
+        vaults: {},
+        default: null,
+        models: { productDownshift: false },
+      }),
+    );
+    assert.equal(cfg.readConfig().productDownshift, false);
+  });
+
+  it("explicit models.productDownshift: true round-trips (matches default)", () => {
+    mkdirSync(cfg.configDir(), { recursive: true });
+    writeFileSync(
+      cfg.configPath(),
+      JSON.stringify({
+        vaults: {},
+        default: null,
+        models: { productDownshift: true },
+      }),
+    );
+    assert.equal(cfg.readConfig().productDownshift, true);
+  });
+
+  it("setProductDownshift(false) persists to on-disk JSON under models.productDownshift", () => {
+    cfg.setProductDownshift(false);
+    const persisted = JSON.parse(readFileSync(cfg.configPath(), "utf8"));
+    assert.equal(persisted.models.productDownshift, false);
+    assert.equal(cfg.getProductDownshift(), false);
+  });
+
+  it("setProductDownshift(true) — matching the default — is omitted from on-disk JSON", () => {
+    cfg.setProductDownshift(false);
+    cfg.setProductDownshift(true);
+    const persisted = JSON.parse(readFileSync(cfg.configPath(), "utf8"));
+    // No models block at all: the disk should be tidy when nothing deviates.
+    assert.equal(persisted.models, undefined);
+    assert.equal(cfg.getProductDownshift(), true);
+  });
+
+  it("setter rewrites in place when called twice with different values", () => {
+    cfg.setProductDownshift(false);
+    cfg.setProductDownshift(true);
+    cfg.setProductDownshift(false);
+    assert.equal(cfg.getProductDownshift(), false);
+  });
+
+  it("co-exists with per-phase model overrides on disk", () => {
+    cfg.setModel("product", "claude-haiku-4-5");
+    cfg.setProductDownshift(false);
+    const persisted = JSON.parse(readFileSync(cfg.configPath(), "utf8"));
+    assert.equal(persisted.models.product, "claude-haiku-4-5");
+    assert.equal(persisted.models.productDownshift, false);
+  });
+
+  it("preserves vaults + default + stamp + models on round-trip", () => {
+    const vaultDir = join(fakeHome, "v");
+    mkdirSync(vaultDir);
+    cfg.addVault(vaultDir, { name: "personal" });
+    cfg.setStampHost("ssh://git@x:1");
+    cfg.setModel("spike", "claude-opus-4-7");
+    cfg.setProductDownshift(false);
+    const persisted = JSON.parse(readFileSync(cfg.configPath(), "utf8"));
+    assert.equal(persisted.vaults.personal, vaultDir);
+    assert.equal(persisted.default, "personal");
+    assert.equal(persisted.stamp.host, "ssh://git@x:1");
+    assert.equal(persisted.models.spike, "claude-opus-4-7");
+    assert.equal(persisted.models.productDownshift, false);
+  });
+
+  it("normalise drops productDownshift if it isn't a boolean (defensive)", () => {
+    mkdirSync(cfg.configDir(), { recursive: true });
+    writeFileSync(
+      cfg.configPath(),
+      JSON.stringify({
+        vaults: {},
+        default: null,
+        models: { productDownshift: "nope" },
+      }),
+    );
+    // Anything that isn't strictly `false` reads as default-on. The
+    // string "nope" is not strictly false → on.
+    assert.equal(cfg.readConfig().productDownshift, true);
+  });
+
+  it("normalise on disk does not pick productDownshift up as a phase model id", () => {
+    mkdirSync(cfg.configDir(), { recursive: true });
+    writeFileSync(
+      cfg.configPath(),
+      JSON.stringify({
+        vaults: {},
+        default: null,
+        models: { productDownshift: false, product: "claude-haiku-4-5" },
+      }),
+    );
+    const r = cfg.readConfig();
+    assert.deepEqual(r.models, { product: "claude-haiku-4-5" });
+    assert.equal(r.productDownshift, false);
   });
 });

@@ -61,6 +61,8 @@ Write the comment in this shape:
 - <bullet 2>
 ```
 
+If your appended system context flags the **AGT-107 haiku-downshift heuristic** as active (a `# Product agent: haiku-downshift heuristic active` block), use the header `### YYYY-MM-DD — Product agent (haiku-downshift)` instead of the standard form. The runner has already spawned you on Haiku 4.5; the suffix makes the heuristic visible in the ticket's audit trail.
+
 ## Phase 3 — Engineering agent (state: refined → spike phase)
 
 **Step 0 — Workspace is already prepared.** When `oteam assign` spawned you against a repo-bound ticket, it already cloned `/tmp/open-team-issues/<ticket-id-lowercased>/repo` (from the stamp server when `stamp.enforce: true` is set in `~/.open-team/config.json`; from GitHub otherwise, or when `--no-stamp` was passed) and set your cwd to it. Confirm with `pwd` and `git remote -v`; for stamp-governed repos you should see exactly one remote, `origin`, pointing at `ssh://git@<stamp-host>:<port>/srv/git/<basename>.git`.
