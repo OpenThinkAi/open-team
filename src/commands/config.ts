@@ -6,12 +6,14 @@ import {
   configPath,
   getModels,
   getStampConfig,
+  getTelemetryEnabled,
   listVaults,
   removeVault,
   setDefault,
   setModel,
   setStampEnforce,
   setStampHost,
+  setTelemetryEnabled,
 } from "../lib/config.ts";
 import { isPhase, PHASES, type Phase } from "../lib/models.ts";
 
@@ -181,9 +183,38 @@ export function buildConfigCommand(): Command {
       process.stdout.write(lines.join("\n") + "\n");
     });
 
+  const telemetry = new Command("telemetry").description(
+    "Manage per-phase telemetry recording (default: on)",
+  );
+
+  telemetry
+    .command("set <on|off>")
+    .description("Turn per-phase telemetry recording on or off")
+    .action((flag: string) => {
+      const lower = flag.toLowerCase();
+      if (lower !== "on" && lower !== "off") {
+        process.stderr.write(
+          `oteam config telemetry set: expected on|off, got "${flag}"\n`,
+        );
+        process.exit(2);
+      }
+      const next = setTelemetryEnabled(lower === "on");
+      process.stdout.write(
+        `✅ telemetry ${next.enabled ? "on" : "off"}\n`,
+      );
+    });
+
+  telemetry
+    .command("show")
+    .description("Print whether telemetry recording is on")
+    .action(() => {
+      process.stdout.write(`${getTelemetryEnabled() ? "on" : "off"}\n`);
+    });
+
   config.addCommand(vault);
   config.addCommand(stamp);
   config.addCommand(models);
+  config.addCommand(telemetry);
   return config;
 }
 

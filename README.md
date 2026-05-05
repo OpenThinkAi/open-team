@@ -78,6 +78,10 @@ oteam config stamp show               # print current stamp config
 oteam config models set <phase> <id>  # pin a model per role-pipeline phase
 oteam config models clear <phase>     # remove a per-phase override
 oteam config models show              # print current per-phase overrides
+oteam config telemetry set on|off     # toggle per-phase telemetry recording
+oteam config telemetry show           # print telemetry on/off state
+oteam telemetry summary [--days N] [--phase X] [--model Y]
+oteam telemetry tail [-n 20]          # last N telemetry lines (raw JSONL)
 ```
 
 Most commands accept `--vault <name-or-path>` to operate on a specific vault.
@@ -189,6 +193,37 @@ oteam config models clear spike  # falls back to the role-pipeline default
 ```
 
 Each field is independent. Unset phases fall back to the role-pipeline default (currently `claude-opus-4-7`); validation is "non-empty string", and the SDK rejects unknown ids at spawn time. Re-running `oteam init` against a config that already has any per-phase model set leaves the entire `models` block alone — your customisation wins. A spike that auto-proceeds to implementation in the same session keeps the spike-phase model (one model per spawn).
+
+## Telemetry
+
+Every role-pipeline spawn records one JSON line capturing wall-clock + token usage to `~/.open-team/telemetry/runs.jsonl`. The intent is data-driven model tuning — the per-phase defaults above are educated guesses, and the only way to know whether Sonnet QA actually catches what Opus QA does is to measure both.
+
+Each line looks like:
+
+```json
+{ "ticket": "AGT-108", "phase": "implementation", "model": "claude-sonnet-4-6",
+  "started-at": "2026-05-04T10:00:00.000Z", "ended-at": "2026-05-04T10:05:42.000Z",
+  "wall-clock-ms": 342000,
+  "tokens": { "input": 230, "output": 120, "cache-read": 18100, "cache-write": 50 },
+  "outcome": "done" }
+```
+
+`outcome` is one of `done` / `paused` / `failed` / `unknown`, classified from the STOP banner the role-pipeline body emits (`✅ DONE` / `⏸️ PAUSED` / `🛑 BLOCKED`). A non-zero `claude` exit pins the outcome to `failed` regardless of marker.
+
+Inspect:
+
+```sh
+oteam telemetry tail            # last 20 lines (raw JSONL)
+oteam telemetry summary         # aggregate by phase × model
+oteam telemetry summary --days 7
+oteam telemetry summary --phase implementation --model claude-sonnet-4-6
+```
+
+Knobs:
+
+- `OTEAM_TELEMETRY_DIR=<path>` overrides the default `~/.open-team/telemetry/` location.
+- `oteam config telemetry set off` opts out — no JSONL writes occur. Re-enable with `oteam config telemetry set on`. Default is on.
+- Telemetry is best-effort: a write failure (read-only dir, missing session file, malformed log) writes one line to stderr and does not fail the role-pipeline phase. Token fields the agent SDK doesn't expose are omitted from the line rather than recorded as zero.
 
 ## Config & multiple vaults
 
