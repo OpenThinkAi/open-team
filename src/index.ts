@@ -9,6 +9,7 @@ import { buildTelemetryCommand } from "./commands/telemetry.ts";
 import { buildTicketCommand } from "./commands/ticket.ts";
 import { assignTicket } from "./role-pipeline/runner.ts";
 import { TICKET_STATES } from "./lib/types.ts";
+import pkg from "../package.json" with { type: "json" };
 
 const program = new Command();
 
@@ -17,7 +18,7 @@ program
   .description(
     "Source-agnostic vault-driven role pipeline for spawning Claude agents against tickets",
   )
-  .version("0.0.1");
+  .version(pkg.version);
 
 async function handlePull(
   source: string,
