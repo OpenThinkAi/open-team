@@ -248,11 +248,13 @@ Never use `--no-verify`. Fix hook failures at the root cause.
 
 #### 5a — Stamp-protected repo
 
-Run review and merge:
+Run review and merge. Capture the review's stdout to a known tempfile so Step 6 can route any `STAMP-RETRO` candidates the reviewers emit. Iterating overwrites the same path on purpose — Step 6 wants the *last* (gate-opening) run.
 
 ```sh
-stamp review --diff "$BASE_BRANCH..$FEATURE_BRANCH"
+STAMP_REVIEW_OUT=$(mktemp -t stamp-review.XXXXXX)
+stamp review --diff "$BASE_BRANCH..$FEATURE_BRANCH" 2>&1 | tee "$STAMP_REVIEW_OUT"
 stamp status --diff "$BASE_BRANCH..$FEATURE_BRANCH"
+STAMP_REVIEW_HEAD_SHA=$(git rev-parse "$FEATURE_BRANCH")
 ```
 
 If the gate isn't open, iterate per the **5-round rule** (rounds 1–5; round 1 catches structure, round 2 consistency, round 3 polish; later rounds rare). Each round: classify findings as *iterable* (typos, naming, missing tests, doc updates, narrowly-scoped fixes) vs *immediate-STOP* (architectural pushback, scope expansion, unresolvable correctness/security claim). On any immediate-STOP finding, surface everything to the human — don't fix the iterables alone. After 5 rounds still red → STOP with `🛑 BLOCKED — Stamp review red after 5 rounds`.
@@ -283,11 +285,13 @@ Capture the PR URL into `linked-pr:`. Human merges through GitHub PR review.
 
 #### 5c — Local-stamp repo (`.stamp/` present, GitHub origin)
 
-Run review on `$WORK_BRANCH` against `$FEATURE_BRANCH` (the eventual PR base):
+Run review on `$WORK_BRANCH` against `$FEATURE_BRANCH` (the eventual PR base). Capture the review's stdout to a known tempfile so Step 6 can route any `STAMP-RETRO` candidates the reviewers emit. Iterating overwrites the same path on purpose — Step 6 wants the *last* (gate-opening) run.
 
 ```sh
-stamp review --diff "$FEATURE_BRANCH..$WORK_BRANCH"
+STAMP_REVIEW_OUT=$(mktemp -t stamp-review.XXXXXX)
+stamp review --diff "$FEATURE_BRANCH..$WORK_BRANCH" 2>&1 | tee "$STAMP_REVIEW_OUT"
 stamp status --diff "$FEATURE_BRANCH..$WORK_BRANCH"
+STAMP_REVIEW_HEAD_SHA=$(git rev-parse "$WORK_BRANCH")
 ```
 
 If the gate isn't open, iterate per the **5-round rule** (same shape as 5a — round 1 structure, round 2 consistency, round 3 polish; later rounds rare). Amend on `$WORK_BRANCH` between rounds. After 5 rounds still red → STOP with `🛑 BLOCKED — Local stamp review red after 5 rounds`.
@@ -305,6 +309,48 @@ git branch -D "$WORK_BRANCH"
 `stamp push` is intentionally absent — there is no stamp server. The signed merge commit is the PR head; reviewers can `stamp verify <pr-head-sha>` from any clone whose `.stamp/trusted-keys/` contains the signing key. Capture the PR URL into `linked-pr:`. Human merges through GitHub PR review. Never merge a GitHub PR yourself.
 
 Local-stamp is single-tier only — the PR base is always `$DEFAULT_BRANCH`. Two-tier (stacked-base) flows require a stamp server to hold the intermediate base branch and aren't supported in this mode.
+
+**6. Route stamp retro candidates (stamp / local-stamp only).** Skipped when `MODE=plain` — plain GitHub repos don't run `stamp review`, so there are no retro fences to parse.
+
+`@openthink/stamp@1.1.0+` emits codebase-learning observations on `stamp review` stdout, fenced as `STAMP-RETRO v=1 reviewer="<reviewer-id>"` … `END-STAMP-RETRO` with an inner `{candidates: [...]}` JSON block. Each candidate carries a `kind` (`convention | invariant | prior_decision | gotcha`) and a human-readable observation. Step 5's `tee` captured the last (gate-opening) `stamp review` invocation's output to `$STAMP_REVIEW_OUT`, and `$STAMP_REVIEW_HEAD_SHA` records what HEAD that review ran against. Route those candidates as `iterative-learning` issues on the ticket's `repo:` so the next agent working there inherits the lesson.
+
+Run this **after** the merge / push / PR-create from Step 5 completes — never before — so a retro hiccup can't block what already shipped.
+
+For each fence in `$STAMP_REVIEW_OUT`:
+
+1. **Parse.** Extract the `reviewer="…"` attribute and the inner JSON. If the JSON is malformed for a given fence, STOP with `🛑 BLOCKED — Could not parse STAMP-RETRO fence from <reviewer>`. The producer protocol is the contract; a parse failure is a real signal, not noise to swallow.
+
+2. **Filter for codebase-only.** Drop any candidate whose observation is *about the agent's own tools* — stamp, oteam, think, claude-code, the role-pipeline prompt itself. Those belong to the deferred per-tool triage channel and are out of scope here. "About" means the tool is the *subject* of the observation (e.g. "stamp's review output is hard to grep") — not just a passing reference (e.g. "this reviewer prompt assumes stamp is installed"). Use judgment; if you're 50/50, keep the candidate — over-filing is recoverable, under-filing is silent loss.
+
+3. **Dedupe semantically.** For each surviving candidate, search existing issues on the ticket's `repo:` frontmatter (referred to below as `$REPO` — never `OpenThinkAi/stamp-cli` or `OpenThinkAi/open-team`, which are tool-friction targets that were already filtered out in step 2):
+
+   ```sh
+   gh issue list --repo "$REPO" --label iterative-learning --state all --search "<2–4 keywords from the observation>"
+   ```
+
+   Read the returned issues' titles/bodies and decide whether any is a near-duplicate of the candidate (same observation, possibly different wording). If yes, skip. If the search returns ambiguous matches you can't confidently classify after one widened search, STOP with `🛑 BLOCKED — Ambiguous retro dedupe for <reviewer>; needs human call`.
+
+4. **File survivors.**
+
+   ```sh
+   gh issue create --repo "$REPO" \
+     --label iterative-learning \
+     --title "<concise summary of the observation, ≤72 chars>" \
+     --body "$(cat <<EOF
+   <full observation text from the candidate>
+
+   ---
+   - **kind**: <convention | invariant | prior_decision | gotcha>
+   - **emitted by reviewer**: <reviewer-id from the fence attribute>
+   - **emitted from ticket**: $TICKET_ID
+   - **stamp head SHA**: $STAMP_REVIEW_HEAD_SHA
+   EOF
+   )"
+   ```
+
+   On a `gh` API failure (auth, rate limit, network), STOP with `🛑 BLOCKED — gh issue create failed for <candidate title>`.
+
+Successful filing and successful dedupe are both **silent** — they show up in your transcript but are not a stop condition. Only failures STOP. If `$STAMP_REVIEW_OUT` is empty or contains no `STAMP-RETRO` fences (e.g. the installed `@openthink/stamp` predates 1.1.0, or every reviewer emitted zero candidates), proceed silently — that's a valid no-op.
 
 ### Phase 4.5 — Release follow-up (single-tier stamp only)
 
