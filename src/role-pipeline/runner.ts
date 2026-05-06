@@ -187,9 +187,12 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
         }
       : null;
 
-  const kittyPath =
-    !opts.workInline && isMacOS() ? findKittyBinary() : null;
-  if (!kittyPath) {
+  // AGT-017: when the user asked for inline (or the platform can't host kitty
+  // anyway), take the inline path and print a starting line. Failures from
+  // here on are loud (stderr + non-zero exit) — no silent fallback.
+  const wantsKitty = !opts.workInline && isMacOS();
+  if (!wantsKitty) {
+    process.stdout.write(inlineStartLine(ticket.id) + "\n");
     runInline(
       claudePath,
       ticketPath,
@@ -202,23 +205,22 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
     return;
   }
 
+  const kittyPath = findKittyBinary();
+  if (!kittyPath) {
+    process.stderr.write(
+      "oteam assign: kitty not installed (or not on PATH); pass --inline to run in this terminal\n",
+    );
+    process.exit(1);
+  }
+
   const monitored = opts.monitoredOrgs ?? readMonitoredOrgsFromEnv();
   const preferring = preferredKittyContext(ticket.repo, monitored);
   const socket = findKittySocket(kittyPath, preferring);
   if (!socket) {
     process.stderr.write(
-      `oteam assign: no kitty socket reachable (preferring "${preferring}"); falling back to inline run.\n`,
+      `oteam assign: no kitty socket reachable (preferring "${preferring}"); pass --inline to run in this terminal\n`,
     );
-    runInline(
-      claudePath,
-      ticketPath,
-      resolvedVault.path,
-      systemPrompt,
-      workspace,
-      model,
-      telemetry,
-    );
-    return;
+    process.exit(1);
   }
 
   const cwd = workspace?.path ?? dirname(ticketPath);
@@ -281,6 +283,19 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
       `kitty @ launch exited ${result.exitCode}: ${result.stderr || "(no stderr)"}`,
     );
   }
+  process.stdout.write(kittySpawnLine(ticket.id, workspace?.path ?? null) + "\n");
+}
+
+export function kittySpawnLine(
+  ticketId: string,
+  workspacePath: string | null,
+): string {
+  const suffix = workspacePath ? ` (worktree at ${workspacePath})` : "";
+  return `oteam assign: spawned kitty window for ${ticketId}${suffix}`;
+}
+
+export function inlineStartLine(ticketId: string): string {
+  return `oteam assign: running inline for ${ticketId}; agent starting…`;
 }
 
 interface TelemetryHandle {
