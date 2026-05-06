@@ -1,6 +1,6 @@
 {
   "name": "@openthink/team",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "type": "module",
   "description": "Source-agnostic vault-driven role pipeline for spawning Claude agents against tickets",
   "bin": {
