@@ -177,5 +177,19 @@ repos: []
 # ${id}
 
 <!-- Canonical design doc for this project. Tickets reference this project via \`project: ${id}\` in their frontmatter. The role-pipeline auto-loads this README into the spawned agent's context, so anything authoritative about the project's architecture, scope, naming, or defaults belongs here. -->
+
+## Tickets
+
+For the live ticket list, run:
+
+\`\`\`sh
+oteam project show ${id} --tickets
+\`\`\`
+
+Tickets are not stored inside this folder — they live in \`<vault>/tickets/<state>/\` and reference this project via frontmatter \`project: ${id}\`.
+
+### Notable shipped milestones (drift expected)
+
+<!-- Hand-maintained narrative entries for shipped work worth calling out. The \`oteam project show ${id} --tickets\` command above is the canonical source of truth for the ticket list — keep entries here to short, durable highlights, and accept that this subsection will drift. -->
 `;
 }
