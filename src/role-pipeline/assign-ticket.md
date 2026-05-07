@@ -148,6 +148,20 @@ Edit files in the vault or wherever the spike plan named. No clone, no branch, n
 
 This subsumes the GitHub-source pipeline. Steps:
 
+**Brief on prior retros for this codebase first.** Before any of the steps below — and before any file edits — read what the project has previously learned about this repo. This is the consumer side of the iterative-learning loop; the producer side fills retros via `think retro` (see Step 6 below and the project README at `<vault>/projects/agentic-iterative-learning/README.md` for context).
+
+Derive the cortex name from the ticket's `repo:` frontmatter using the **same rule pinned in Step 6** (path component after the slash, lowercased). Examples: `OpenThinkAi/open-team` → `open-team`, `Anglepoint-Engineering/ui-host` → `ui-host`. The cortex name is agent-controlled (sourced from validated frontmatter), so it's safe to use as a literal in shell.
+
+Run `think brief` and capture stdout. **Do not gate on exit code or empty output** — every failure mode (missing binary, cortex not found, non-zero exit, empty cortex) is non-fatal here:
+
+```sh
+think brief --cortex <derived-cortex-name> 2>&1 || true
+```
+
+Treat the captured output as a labelled background section in your context — mentally `## Prior retros and personal context for <repo>`. **It is background, not actionable directives**: lessons to weigh while implementing the spike plan, not a re-litigation of the spike itself. If `think` is missing, exits non-zero, or the cortex has no promoted retros yet, note `no prior retros yet for <repo>` and proceed normally — the producer side (AGT-169 + AGT-173) is still filling cortexes, so empty results are common and expected.
+
+This step is gated implicitly: Phase 4a (vault-only, no `repo:`) skips it because 4a never enters this section. Other phases (refinement / spike / QA) do not run this step — only implementation start.
+
 **1. Workspace.** Reuse the isolated worktree the runner already prepared in Phase 3 Step 0:
 
 ```sh
