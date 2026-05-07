@@ -159,4 +159,17 @@ describe("projectFrontmatterTemplate", () => {
     assert.match(text, /^status: planning$/m);
     assert.match(text, /^repos: \[\]$/m);
   });
+
+  it("points at the canonical ticket-list command instead of a hand-maintained list", () => {
+    const text = projectFrontmatterTemplate("hello-world");
+    assert.match(text, /^## Tickets$/m);
+    assert.match(text, /oteam project show hello-world --tickets/);
+    // Drift-prone hand-maintained list shapes must not appear in the scaffold.
+    assert.doesNotMatch(text, /^- \*\*AGT-/m);
+  });
+
+  it("includes an empty Notable shipped milestones subsection", () => {
+    const text = projectFrontmatterTemplate("hello-world");
+    assert.match(text, /^### Notable shipped milestones \(drift expected\)$/m);
+  });
 });
