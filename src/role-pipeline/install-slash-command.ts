@@ -3,40 +3,46 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Source markdown that ships with the npm package. tsup copies it to dist/
-// next to index.js (see package.json `build` script).
+// Source markdown files that ship with the npm package. tsup copies them to
+// dist/ next to index.js (see package.json `build` script).
 const moduleDir = dirname(fileURLToPath(import.meta.url));
-const BUNDLED_PROMPT = join(moduleDir, "assign-ticket.md");
+const BUNDLED_COMMANDS: ReadonlyArray<{ src: string; dest: string }> = [
+  { src: join(moduleDir, "assign-ticket.md"), dest: "assign-ticket.md" },
+  { src: join(moduleDir, "implement-project.md"), dest: "implement-project.md" },
+];
 
 /**
- * Install the bundled `/assign-ticket` slash-command body into every Claude
+ * Install the bundled role-pipeline slash-command bodies into every Claude
  * config dir we can reasonably find. The spawned `claude` session picks the
  * one matching its $CLAUDE_CONFIG_DIR; agentic-desktop and many users run
  * multiple parallel Claude profiles (`~/.claude`, `~/.claude-personal`,
- * `~/.claude-work`), and each needs a copy or `/assign-ticket` is "Unknown
+ * `~/.claude-work`), and each needs a copy or the commands are "Unknown
  * command" in that profile.
  *
+ * Installs: /assign-ticket, /implement-project.
+ *
  * Idempotent: skips writes when contents already match. Best-effort: a write
- * failure on one target doesn't stop the others. No-op if the bundled prompt
- * isn't present (dev-mode without `npm run build`).
+ * failure on one target doesn't stop the others. No-op for any command whose
+ * bundled source isn't present (dev-mode without `npm run build`).
  */
 export function installRolePipelineSlashCommand(): void {
-  if (!existsSync(BUNDLED_PROMPT)) return;
-  const bundled = readFileSync(BUNDLED_PROMPT);
-
   const targets = resolveTargetDirs();
-  for (const dir of targets) {
-    try {
-      mkdirSync(dir, { recursive: true });
-      const target = join(dir, "assign-ticket.md");
-      if (existsSync(target)) {
-        const current = readFileSync(target);
-        if (current.equals(bundled)) continue;
+  for (const { src, dest } of BUNDLED_COMMANDS) {
+    if (!existsSync(src)) continue;
+    const bundled = readFileSync(src);
+    for (const dir of targets) {
+      try {
+        mkdirSync(dir, { recursive: true });
+        const target = join(dir, dest);
+        if (existsSync(target)) {
+          const current = readFileSync(target);
+          if (current.equals(bundled)) continue;
+        }
+        copyFileSync(src, target);
+      } catch {
+        // Don't fail the spawn over an install hiccup — the user can still
+        // invoke `claude` manually if their preferred profile is unreachable.
       }
-      copyFileSync(BUNDLED_PROMPT, target);
-    } catch {
-      // Don't fail the spawn over an install hiccup — the user can still
-      // invoke `claude` manually if their preferred profile is unreachable.
     }
   }
 }
