@@ -1,15 +1,18 @@
 import { Command } from "commander";
 import {
   addVault,
+  clearBotIdentity,
   clearModel,
   clearStamp,
   configPath,
+  getBotIdentity,
   getModels,
   getProductDownshift,
   getStampConfig,
   getTelemetryEnabled,
   listVaults,
   removeVault,
+  setBotIdentity,
   setDefault,
   setModel,
   setProductDownshift,
@@ -236,10 +239,39 @@ export function buildConfigCommand(): Command {
       process.stdout.write(`${getTelemetryEnabled() ? "on" : "off"}\n`);
     });
 
+  const botIdentity = new Command("bot-identity").description(
+    "Manage the GitHub login `oteam assign` claims issues under (default: empty — no claim attempted)",
+  );
+
+  botIdentity
+    .command("set <login>")
+    .description("Set the bot identity (GitHub login)")
+    .action((login: string) => {
+      const next = setBotIdentity(login);
+      process.stdout.write(`✅ botIdentity = ${next}\n`);
+    });
+
+  botIdentity
+    .command("clear")
+    .description("Remove the bot identity (disables claim-on-assign)")
+    .action(() => {
+      clearBotIdentity();
+      process.stdout.write("✅ botIdentity cleared\n");
+    });
+
+  botIdentity
+    .command("show")
+    .description("Print the current bot identity")
+    .action(() => {
+      const id = getBotIdentity();
+      process.stdout.write(id.length > 0 ? `${id}\n` : "(unset)\n");
+    });
+
   config.addCommand(vault);
   config.addCommand(stamp);
   config.addCommand(models);
   config.addCommand(telemetry);
+  config.addCommand(botIdentity);
   return config;
 }
 

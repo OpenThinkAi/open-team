@@ -253,6 +253,32 @@ Paths are resolved to absolute at `add` time, so the registration survives `cd`.
 - **AGT-NNN shorthand**: `oteam assign AGT-001` walks `<vault>/tickets/<state>/` for a file whose basename starts with `AGT-001-`.
 - **Vault auto-detection from path**: passing a full path that lives inside a registered vault root makes that vault the active one for the run, even if it's not the default. The spawned `_role-run` then inherits `PRODUCT_VAULT_PATH=<that-vault>` so any follow-up `oteam pull/list/...` from the agent lands in the same vault.
 
+## Claim-on-assign (preventing double-pickup)
+
+When multiple operators or agents work the same vault, two of them can race on the same ticket — both run `oteam assign` and both spin up role pipelines against the same GitHub issue. To prevent that, `oteam assign` can claim the underlying GH issue (sets `assignees`) before driving the pipeline:
+
+```sh
+oteam config bot-identity set <github-login>      # e.g. your own login, or a dedicated bot account
+oteam config bot-identity show
+oteam config bot-identity clear                   # disable claim-on-assign
+```
+
+When `botIdentity` is set, every `oteam assign` run on a github-sourced ticket does the following pre-flight before any expensive setup:
+
+1. GET the issue from `source.url`.
+2. If state is `closed` → exit 1 (refuses to drive the pipeline on resolved work).
+3. If already assigned to someone other than `botIdentity` → exit 1 (someone else has it).
+4. PATCH `assignees: [botIdentity]`. Re-read the response.
+5. If assignees came back empty, the operator's `gh` token has no push access on the repo (GitHub silently drops assignee changes without it) → exit 1 with a hint.
+6. If assignees != `[botIdentity]` (race with another writer) → exit 1.
+7. Otherwise the claim is held; proceed.
+
+When `botIdentity` is empty (the default), the pre-flight is skipped — backwards-compatible with configs that predate the field.
+
+Per-invocation override: `OTEAM_BOT_IDENTITY=<login> oteam assign …`. Useful when one operator runs occasionally under a different identity (e.g. testing with a personal account) without rewriting the persisted config.
+
+Manual tickets (`source.type: manual`) and tickets with no parseable GH URL skip the claim entirely — there's nothing to claim.
+
 ## Migration from agentic-desktop
 
 agentic-desktop now keeps only the PR-side modules (`GitHubPRs`, `AIReview*`, `ClaudeCodeService`, menu-bar shell). The Issues panel, Vault module, AgentAssignmentService, and Ingestors moved here.
