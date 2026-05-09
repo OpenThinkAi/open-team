@@ -235,6 +235,7 @@ describe("config: empty state", () => {
       vaults: {},
       default: null,
       stamp: null,
+      repos: {},
       models: {},
       productDownshift: true,
       telemetry: { enabled: true },
@@ -712,5 +713,121 @@ describe("config: botIdentity", () => {
     } finally {
       delete process.env.OTEAM_BOT_IDENTITY;
     }
+  });
+});
+
+describe("config: repos (AGT-097)", () => {
+  it("defaults to empty repos on a fresh config", () => {
+    const r = cfg.readConfig();
+    assert.deepEqual(r.repos, {});
+    assert.ok(!existsSync(cfg.configPath()));
+  });
+
+  it("setRepoCloneUri adds a new entry and returns it", () => {
+    const entry = cfg.setRepoCloneUri("OpenThinkAi/open-team", "git@github.com:OpenThinkAi/open-team.git");
+    assert.equal(entry["clone-uri"], "git@github.com:OpenThinkAi/open-team.git");
+    assert.ok(entry.added.length > 0);
+  });
+
+  it("getRepoEntry retrieves a recorded entry", () => {
+    cfg.setRepoCloneUri("OpenThinkAi/open-team", "git@github.com:OpenThinkAi/open-team.git");
+    const e = cfg.getRepoEntry("OpenThinkAi/open-team");
+    assert.ok(e !== null);
+    assert.equal(e!["clone-uri"], "git@github.com:OpenThinkAi/open-team.git");
+  });
+
+  it("getRepoEntry returns null for an unknown slug", () => {
+    assert.equal(cfg.getRepoEntry("nobody/nope"), null);
+  });
+
+  it("lookup is case-insensitive", () => {
+    cfg.setRepoCloneUri("OpenThinkAi/open-team", "git@github.com:OpenThinkAi/open-team.git");
+    const e = cfg.getRepoEntry("openthinkAI/OPEN-TEAM");
+    assert.ok(e !== null);
+    assert.equal(e!["clone-uri"], "git@github.com:OpenThinkAi/open-team.git");
+  });
+
+  it("setRepoCloneUri updates clone-uri but preserves added timestamp", () => {
+    const first = cfg.setRepoCloneUri("OpenThinkAi/open-team", "git@github.com:OpenThinkAi/open-team.git");
+    const second = cfg.setRepoCloneUri("OpenThinkAi/open-team", "ssh://git@stamp.example.com:22000/srv/git/open-team.git");
+    assert.equal(second["clone-uri"], "ssh://git@stamp.example.com:22000/srv/git/open-team.git");
+    assert.equal(second.added, first.added, "added timestamp must not change on update");
+  });
+
+  it("add → list → remove round-trip", () => {
+    cfg.setRepoCloneUri("OpenThinkAi/open-team", "git@github.com:OpenThinkAi/open-team.git");
+    cfg.setRepoCloneUri("OpenThinkAi/think-cli", "git@github.com:OpenThinkAi/think-cli.git");
+    const entries = cfg.listRepoEntries();
+    assert.equal(entries.length, 2);
+    assert.equal(entries[0]!.slug, "OpenThinkAi/open-team");
+    assert.equal(entries[1]!.slug, "OpenThinkAi/think-cli");
+
+    const removed = cfg.removeRepoEntry("OpenThinkAi/open-team");
+    assert.equal(removed, true);
+    assert.equal(cfg.listRepoEntries().length, 1);
+    assert.equal(cfg.getRepoEntry("OpenThinkAi/open-team"), null);
+  });
+
+  it("removeRepoEntry is idempotent (no-op on absent slug)", () => {
+    const r = cfg.removeRepoEntry("nobody/nope");
+    assert.equal(r, false);
+  });
+
+  it("empty repos block is omitted from on-disk JSON", () => {
+    const vault = join(fakeHome, "v");
+    mkdirSync(vault, { recursive: true });
+    cfg.addVault(vault);
+    const onDisk = JSON.parse(readFileSync(cfg.configPath(), "utf8"));
+    assert.equal(onDisk.repos, undefined);
+  });
+
+  it("non-empty repos block is persisted to disk and normalised on read", () => {
+    cfg.setRepoCloneUri("OpenThinkAi/open-team", "git@github.com:OpenThinkAi/open-team.git");
+    const onDisk = JSON.parse(readFileSync(cfg.configPath(), "utf8"));
+    assert.ok(onDisk.repos !== undefined);
+    assert.equal(onDisk.repos["OpenThinkAi/open-team"]["clone-uri"], "git@github.com:OpenThinkAi/open-team.git");
+    const reread = cfg.readConfig();
+    assert.equal(reread.repos["OpenThinkAi/open-team"]?.["clone-uri"], "git@github.com:OpenThinkAi/open-team.git");
+  });
+
+  it("normaliser drops malformed repo entries (missing or empty clone-uri)", () => {
+    mkdirSync(cfg.configDir(), { recursive: true });
+    writeFileSync(
+      cfg.configPath(),
+      JSON.stringify({
+        vaults: {},
+        default: null,
+        repos: {
+          "good/repo": { "clone-uri": "git@github.com:good/repo.git", added: "2026-01-01T00:00:00.000Z" },
+          "bad/no-uri": { added: "2026-01-01T00:00:00.000Z" },
+          "bad/empty-uri": { "clone-uri": "   ", added: "2026-01-01T00:00:00.000Z" },
+          "bad//double-slash": { "clone-uri": "git@github.com:x.git", added: "2026-01-01T00:00:00.000Z" },
+        },
+      }),
+    );
+    const r = cfg.readConfig();
+    assert.deepEqual(Object.keys(r.repos), ["good/repo"]);
+  });
+
+  it("setRepoCloneUri rejects an invalid slug shape", () => {
+    assert.throws(() => cfg.setRepoCloneUri("no-slash", "git@x.com:x.git"), /invalid repo slug/);
+    assert.throws(() => cfg.setRepoCloneUri("too/many/slashes", "git@x.com:x.git"), /invalid repo slug/);
+  });
+
+  it("setRepoCloneUri rejects an empty clone URI", () => {
+    assert.throws(() => cfg.setRepoCloneUri("OpenThinkAi/open-team", ""), /cannot be empty/);
+    assert.throws(() => cfg.setRepoCloneUri("OpenThinkAi/open-team", "   "), /cannot be empty/);
+  });
+
+  it("preserves vaults + stamp + models on repos round-trip", () => {
+    const vaultDir = join(fakeHome, "v");
+    mkdirSync(vaultDir);
+    cfg.addVault(vaultDir, { name: "personal" });
+    cfg.setStampHost("ssh://git@x:1");
+    cfg.setRepoCloneUri("OpenThinkAi/open-team", "git@github.com:OpenThinkAi/open-team.git");
+    const persisted = JSON.parse(readFileSync(cfg.configPath(), "utf8"));
+    assert.equal(persisted.vaults.personal, vaultDir);
+    assert.equal(persisted.stamp.host, "ssh://git@x:1");
+    assert.equal(persisted.repos["OpenThinkAi/open-team"]["clone-uri"], "git@github.com:OpenThinkAi/open-team.git");
   });
 });

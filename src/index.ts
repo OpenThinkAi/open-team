@@ -23,13 +23,14 @@ program
 async function handlePull(
   source: string,
   ref: string,
-  opts: { vault?: string; project?: string },
+  opts: { vault?: string; project?: string; cloneUri?: string },
 ): Promise<void> {
   const result = await runPull({
     source,
     ref,
     vault: opts.vault,
     project: opts.project,
+    cloneUri: opts.cloneUri,
   });
   const verb = result.reused ? "Reused existing" : "Filed";
   process.stdout.write(`✅ ${verb} ${result.ticketID}\n   ${result.path}\n`);
@@ -45,6 +46,10 @@ program
     "--project <name>",
     "Tag the ticket with a project name (defaults to the source repo's bare name)",
   )
+  .option(
+    "--clone-uri <url>",
+    "Record this clone URI for the repo instead of prompting (daemon-friendly)",
+  )
   .action(handlePull);
 
 // `ingest` is the literal verb AC #2 enumerates; `pull` is the user-facing
@@ -58,6 +63,10 @@ program
   .option(
     "--project <name>",
     "Tag the ticket with a project name (defaults to the source repo's bare name)",
+  )
+  .option(
+    "--clone-uri <url>",
+    "Record this clone URI for the repo instead of prompting (daemon-friendly)",
   )
   .action(handlePull);
 

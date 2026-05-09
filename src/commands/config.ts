@@ -8,14 +8,18 @@ import {
   getBotIdentity,
   getModels,
   getProductDownshift,
+  getRepoEntry,
   getStampConfig,
   getTelemetryEnabled,
+  listRepoEntries,
   listVaults,
+  removeRepoEntry,
   removeVault,
   setBotIdentity,
   setDefault,
   setModel,
   setProductDownshift,
+  setRepoCloneUri,
   setStampEnforce,
   setStampHost,
   setTelemetryEnabled,
@@ -267,8 +271,73 @@ export function buildConfigCommand(): Command {
       process.stdout.write(id.length > 0 ? `${id}\n` : "(unset)\n");
     });
 
+  const repo = new Command("repo").description(
+    "Manage per-repo clone URIs (<owner>/<name> → git-url)",
+  );
+
+  repo
+    .command("add <slug> <git-url>")
+    .description("Record a clone URI for a repo (e.g. OpenThinkAi/open-team git@github.com:OpenThinkAi/open-team.git)")
+    .action((slug: string, gitUrl: string) => {
+      const entry = setRepoCloneUri(slug, gitUrl);
+      process.stdout.write(`✅ repos.${slug} clone-uri = ${entry["clone-uri"]}\n`);
+    });
+
+  repo
+    .command("set <slug>")
+    .description("Update fields for an existing repo entry")
+    .option("--clone-uri <url>", "New clone URI")
+    .action((slug: string, opts: { cloneUri?: string }) => {
+      if (!opts.cloneUri) {
+        process.stderr.write("oteam config repo set: pass --clone-uri <url>\n");
+        process.exit(2);
+      }
+      const entry = setRepoCloneUri(slug, opts.cloneUri);
+      process.stdout.write(`✅ repos.${slug} clone-uri = ${entry["clone-uri"]}\n`);
+    });
+
+  repo
+    .command("show <slug>")
+    .description("Print the recorded entry for a repo")
+    .action((slug: string) => {
+      const entry = getRepoEntry(slug);
+      if (!entry) {
+        process.stdout.write(`(no entry for "${slug}")\n`);
+        return;
+      }
+      process.stdout.write(`clone-uri: ${entry["clone-uri"]}\nadded:     ${entry.added}\n`);
+    });
+
+  repo
+    .command("list")
+    .description("List all recorded repo entries")
+    .action(() => {
+      const entries = listRepoEntries();
+      if (entries.length === 0) {
+        process.stdout.write(`(no repos registered)\n   config: ${configPath()}\n`);
+        return;
+      }
+      const slugWidth = Math.max(...entries.map((e) => e.slug.length));
+      for (const { slug, entry } of entries) {
+        process.stdout.write(`${slug.padEnd(slugWidth)}  ${entry["clone-uri"]}\n`);
+      }
+    });
+
+  repo
+    .command("remove <slug>")
+    .description("Remove the clone URI entry for a repo (idempotent)")
+    .action((slug: string) => {
+      const removed = removeRepoEntry(slug);
+      if (removed) {
+        process.stdout.write(`✅ Removed "${slug}"\n`);
+      } else {
+        process.stdout.write(`ℹ️  No entry for "${slug}" — nothing to remove\n`);
+      }
+    });
+
   config.addCommand(vault);
   config.addCommand(stamp);
+  config.addCommand(repo);
   config.addCommand(models);
   config.addCommand(telemetry);
   config.addCommand(botIdentity);

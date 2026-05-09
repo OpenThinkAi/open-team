@@ -13,7 +13,6 @@ import { join } from "node:path";
 import {
   gcOrphanWorkspaces,
   prepareAgentWorkspace,
-  StampGateError,
   type CloneResult,
   type CloneRunner,
 } from "../src/lib/workspace.ts";
@@ -42,28 +41,13 @@ function recordCloneRunner(
 }
 
 function withFakeHome(): string {
-  // workspace prep no longer reads anything under $HOME (AGT-096 AC #8);
-  // we still need a writable, empty HOME so `existsSync(... 'Development')`
-  // smoke-checks have a known-clean baseline.
   const fakeHome = mkdtempSync(join(tmpdir(), "oteam-home-"));
   process.env.HOME = fakeHome;
   return fakeHome;
 }
 
-function withTrapServerYml(host: string, port: number): string {
-  // The trap test asserts that workspace.ts ignores ~/.stamp/server.yml
-  // even when one exists with a deliberately wrong host. Used only by that
-  // single test — anywhere else, prefer `withFakeHome()`.
-  const fakeHome = withFakeHome();
-  mkdirSync(join(fakeHome, ".stamp"), { recursive: true });
-  writeFileSync(
-    join(fakeHome, ".stamp", "server.yml"),
-    `host: ${host}\nport: ${port}\n`,
-  );
-  return fakeHome;
-}
-
-const STAMP_HOST = "ssh://git@stamp.example.com:22000";
+const STAMP_URI = "ssh://git@stamp.example.com:22000/srv/git/open-team.git";
+const GITHUB_URI = "git@github.com:OpenThinkAi/open-team.git";
 
 describe("prepareAgentWorkspace", () => {
   let fakeHome: string | null = null;
@@ -80,126 +64,58 @@ describe("prepareAgentWorkspace", () => {
     rmSync(rootDir, { recursive: true, force: true });
   });
 
-  it("mode='stamp' clones from <stampHost>/srv/git/<basename>.git on success", () => {
+  it("clones from the supplied cloneUri on success", () => {
     fakeHome = withFakeHome();
     const calls: FakeCloneCall[] = [];
     const out = prepareAgentWorkspace({
       ticketId: "AGT-001",
-      repoSlug: "OpenThinkAi/think-cli",
-      mode: "stamp",
-      stampHost: STAMP_HOST,
+      repoSlug: "OpenThinkAi/open-team",
+      cloneUri: STAMP_URI,
       cloneRunner: recordCloneRunner({ status: 0, stderr: "" }, calls),
       rootDir,
     });
     assert.equal(calls.length, 1);
-    const call = calls[0]!;
-    assert.equal(
-      call.url,
-      "ssh://git@stamp.example.com:22000/srv/git/think-cli.git",
-    );
-    assert.equal(call.dest, join(rootDir, "agt-001", "repo"));
+    assert.equal(calls[0]!.url, STAMP_URI);
+    assert.equal(calls[0]!.dest, join(rootDir, "agt-001", "repo"));
     assert.equal(out.path, join(rootDir, "agt-001", "repo"));
-    assert.equal(out.source, "stamp");
-    assert.equal(
-      out.originUrl,
-      "ssh://git@stamp.example.com:22000/srv/git/think-cli.git",
-    );
+    assert.equal(out.originUrl, STAMP_URI);
     assert.ok(existsSync(out.path));
   });
 
-  it("mode='stamp' uses the supplied stampHost — never reads ~/.stamp/server.yml (AC #8)", () => {
-    // Seed the fake HOME with a server.yml whose host differs. The clone
-    // runner asserts on the URL it received: if workspace.ts ever fell back
-    // to reading ~/.stamp/server.yml, this would clone from "trap.invalid"
-    // instead of stampHost.
-    fakeHome = withTrapServerYml("trap.invalid", 99999);
+  it("works with a GitHub SSH URI", () => {
+    fakeHome = withFakeHome();
     const calls: FakeCloneCall[] = [];
-    prepareAgentWorkspace({
-      ticketId: "AGT-001",
-      repoSlug: "OpenThinkAi/think-cli",
-      mode: "stamp",
-      stampHost: STAMP_HOST,
+    const out = prepareAgentWorkspace({
+      ticketId: "AGT-004",
+      repoSlug: "OpenThinkAi/plain",
+      cloneUri: GITHUB_URI,
       cloneRunner: recordCloneRunner({ status: 0, stderr: "" }, calls),
       rootDir,
     });
     assert.equal(calls.length, 1);
-    assert.equal(
-      calls[0]!.url,
-      "ssh://git@stamp.example.com:22000/srv/git/think-cli.git",
-      "must use the supplied stampHost, not the trap server.yml",
-    );
+    assert.equal(calls[0]!.url, GITHUB_URI);
+    assert.equal(out.originUrl, GITHUB_URI);
   });
 
-  it("mode='stamp' throws when stampHost is missing/empty (G3 defence)", () => {
+  it("throws a plain Error when the clone fails", () => {
     fakeHome = withFakeHome();
-    assert.throws(
-      () =>
-        prepareAgentWorkspace({
-          ticketId: "AGT-002",
-          repoSlug: "OpenThinkAi/no-host",
-          mode: "stamp",
-          stampHost: "",
-          cloneRunner: recordCloneRunner({ status: 0, stderr: "" }),
-          rootDir,
-        }),
-      /requires opts\.stampHost/,
-    );
-    assert.throws(
-      () =>
-        prepareAgentWorkspace({
-          ticketId: "AGT-002",
-          repoSlug: "OpenThinkAi/no-host",
-          mode: "stamp",
-          cloneRunner: recordCloneRunner({ status: 0, stderr: "" }),
-          rootDir,
-        }),
-      /requires opts\.stampHost/,
-    );
-  });
-
-  it("mode='stamp' throws StampGateError when the clone fails", () => {
-    fakeHome = withFakeHome();
-    const calls: FakeCloneCall[] = [];
     let caught: unknown;
     try {
       prepareAgentWorkspace({
         ticketId: "AGT-003",
         repoSlug: "OpenThinkAi/local-only",
-        mode: "stamp",
-        stampHost: STAMP_HOST,
+        cloneUri: STAMP_URI,
         cloneRunner: recordCloneRunner(
           { status: 128, stderr: "fatal: repository not found\n" },
-          calls,
         ),
         rootDir,
       });
     } catch (err) {
       caught = err;
     }
-    assert.ok(caught instanceof StampGateError);
-    assert.equal(calls.length, 1);
-    const msg = (caught as StampGateError).message;
-    assert.match(msg, /OpenThinkAi\/local-only/);
-    assert.match(msg, /git clone exited 128/);
-    assert.match(msg, /repository not found/);
-    assert.match(msg, /oteam config stamp set --enforce off/);
-  });
-
-  it("mode='github' clones from git@github.com (no stamp consulted)", () => {
-    // No stamp config at all — github mode should not even consult it.
-    fakeHome = mkdtempSync(join(tmpdir(), "stamp-home-no-config-"));
-    process.env.HOME = fakeHome;
-    const calls: FakeCloneCall[] = [];
-    const out = prepareAgentWorkspace({
-      ticketId: "AGT-004",
-      repoSlug: "OpenThinkAi/plain",
-      mode: "github",
-      cloneRunner: recordCloneRunner({ status: 0, stderr: "" }, calls),
-      rootDir,
-    });
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]!.url, "git@github.com:OpenThinkAi/plain.git");
-    assert.equal(out.source, "github");
+    assert.ok(caught instanceof Error);
+    assert.match((caught as Error).message, /clone failed/);
+    assert.match((caught as Error).message, /fatal: repository not found/);
   });
 
   it("rm -rf's a prior workspace before re-cloning (hermetic re-runs)", () => {
@@ -208,13 +124,11 @@ describe("prepareAgentWorkspace", () => {
     mkdirSync(join(ticketDir, "repo"), { recursive: true });
     writeFileSync(join(ticketDir, "repo", "stale.txt"), "from a prior run\n");
 
-    const calls: FakeCloneCall[] = [];
     const out = prepareAgentWorkspace({
       ticketId: "AGT-005",
       repoSlug: "OpenThinkAi/foo",
-      mode: "stamp",
-      stampHost: STAMP_HOST,
-      cloneRunner: recordCloneRunner({ status: 0, stderr: "" }, calls),
+      cloneUri: STAMP_URI,
+      cloneRunner: recordCloneRunner({ status: 0, stderr: "" }),
       rootDir,
     });
     assert.equal(out.path, join(ticketDir, "repo"));
@@ -229,13 +143,12 @@ describe("prepareAgentWorkspace", () => {
     );
   });
 
-  it("never touches $HOME/Development (AC #4 byte-equal smoke)", () => {
+  it("never touches $HOME/Development", () => {
     fakeHome = withFakeHome();
     prepareAgentWorkspace({
       ticketId: "AGT-006",
       repoSlug: "OpenThinkAi/x",
-      mode: "stamp",
-      stampHost: STAMP_HOST,
+      cloneUri: STAMP_URI,
       cloneRunner: recordCloneRunner({ status: 0, stderr: "" }),
       rootDir,
     });
@@ -248,7 +161,6 @@ describe("prepareAgentWorkspace", () => {
 
   it("runs the GC sweep when activeTicketIds is provided", () => {
     fakeHome = withFakeHome();
-    // Seed two stale workspaces and one matching the active set.
     mkdirSync(join(rootDir, "agt-013", "repo"), { recursive: true });
     mkdirSync(join(rootDir, "agt-014", "repo"), { recursive: true });
     mkdirSync(join(rootDir, "agt-007", "repo"), { recursive: true });
@@ -257,31 +169,16 @@ describe("prepareAgentWorkspace", () => {
     prepareAgentWorkspace({
       ticketId: "AGT-007",
       repoSlug: "OpenThinkAi/x",
-      mode: "stamp",
-      stampHost: STAMP_HOST,
+      cloneUri: STAMP_URI,
       cloneRunner: recordCloneRunner({ status: 0, stderr: "" }),
       activeTicketIds: new Set(["agt-007"]),
       rootDir,
     });
 
-    assert.equal(
-      existsSync(join(rootDir, "agt-013")),
-      false,
-      "orphan agt-013 should be swept",
-    );
-    assert.equal(
-      existsSync(join(rootDir, "agt-014")),
-      false,
-      "orphan agt-014 should be swept",
-    );
-    // agt-007 is recreated (active + this run's target), so it must exist.
+    assert.equal(existsSync(join(rootDir, "agt-013")), false, "orphan agt-013 should be swept");
+    assert.equal(existsSync(join(rootDir, "agt-014")), false, "orphan agt-014 should be swept");
     assert.equal(existsSync(join(rootDir, "agt-007", "repo")), true);
-    // Non-AGT dirs are left alone — only `agt-N+` are swept.
-    assert.equal(
-      existsSync(join(rootDir, "stamp-cli-fix")),
-      true,
-      "non-ticket dirs should not be swept",
-    );
+    assert.equal(existsSync(join(rootDir, "stamp-cli-fix")), true, "non-ticket dirs should not be swept");
   });
 });
 
@@ -329,8 +226,6 @@ describe("prepareAgentWorkspace input validation", () => {
   });
 
   it("refuses to operate on a non-AGT ticket id (path-traversal guard)", () => {
-    // Frontmatter could carry a malicious id like "../../.ssh"; the guard
-    // throws before any rmSync gets near a path the user didn't intend.
     const calls: FakeCloneCall[] = [];
     const sentinel = join(rootDir, "should-not-be-touched");
     mkdirSync(sentinel);
@@ -339,7 +234,7 @@ describe("prepareAgentWorkspace input validation", () => {
         prepareAgentWorkspace({
           ticketId: "../../.ssh",
           repoSlug: "OpenThinkAi/x",
-          mode: "github",
+          cloneUri: GITHUB_URI,
           cloneRunner: recordCloneRunner({ status: 0, stderr: "" }, calls),
           rootDir,
         }),
@@ -360,7 +255,7 @@ describe("prepareAgentWorkspace input validation", () => {
           prepareAgentWorkspace({
             ticketId: bad,
             repoSlug: "OpenThinkAi/x",
-            mode: "github",
+            cloneUri: GITHUB_URI,
             cloneRunner: recordCloneRunner({ status: 0, stderr: "" }),
             rootDir,
           }),
