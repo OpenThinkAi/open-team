@@ -8,6 +8,7 @@ import {
   getBotIdentity,
   getModels,
   getProductDownshift,
+  getPush,
   getRepoEntry,
   getStampConfig,
   getTelemetryEnabled,
@@ -19,6 +20,7 @@ import {
   setDefault,
   setModel,
   setProductDownshift,
+  setPush,
   setRepoCloneUri,
   setStampEnforce,
   setStampHost,
@@ -335,12 +337,45 @@ export function buildConfigCommand(): Command {
       }
     });
 
+  const push = new Command("push").description(
+    "Manage the global no-push toggle for the assign-side push step (default: on)",
+  );
+
+  push
+    .command("set <on|off>")
+    .description(
+      "Turn the assign-side push step on or off (idempotent; persists to ~/.open-team/config.json)",
+    )
+    .action((flag: string) => {
+      const lower = flag.toLowerCase();
+      if (lower !== "on" && lower !== "off") {
+        process.stderr.write(
+          `oteam config push set: expected on|off, got "${flag}"\n`,
+        );
+        process.exit(2);
+      }
+      const next = setPush(lower);
+      process.stdout.write(`✅ push ${next}\n`);
+    });
+
+  push
+    .command("show")
+    .description("Print the current push toggle with a one-line description")
+    .action(() => {
+      const flag = getPush();
+      const description = flag === "on"
+        ? "push: on (default) — assigns push to origin after merge"
+        : "push: off — assigns finish at local commit; user pushes manually";
+      process.stdout.write(`${description}\n`);
+    });
+
   config.addCommand(vault);
   config.addCommand(stamp);
   config.addCommand(repo);
   config.addCommand(models);
   config.addCommand(telemetry);
   config.addCommand(botIdentity);
+  config.addCommand(push);
   return config;
 }
 

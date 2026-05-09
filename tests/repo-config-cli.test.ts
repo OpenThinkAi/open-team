@@ -236,3 +236,45 @@ describe("oteam config repo remove", () => {
     assert.match(out, /nothing to remove/i);
   });
 });
+
+describe("oteam config push (AGT-099)", () => {
+  beforeEach(withFakeHome);
+  afterEach(restoreHome);
+
+  it("show prints the default 'on' description before any set", async () => {
+    const { out, exitCode } = await invokeCLI("push", "show");
+    assert.equal(exitCode, null);
+    assert.match(out, /^push: on \(default\)/);
+    assert.match(out, /assigns push to origin after merge/);
+  });
+
+  it("set off then show prints the 'off' description", async () => {
+    const { out: setOut, exitCode } = await invokeCLI("push", "set", "off");
+    assert.equal(exitCode, null);
+    assert.match(setOut, /push off/);
+    const { out: showOut } = await invokeCLI("push", "show");
+    assert.match(showOut, /^push: off/);
+    assert.match(showOut, /user pushes manually/);
+  });
+
+  it("set on after off flips back and show reflects it", async () => {
+    await invokeCLI("push", "set", "off");
+    const { out } = await invokeCLI("push", "set", "on");
+    assert.match(out, /push on/);
+    const { out: showOut } = await invokeCLI("push", "show");
+    assert.match(showOut, /^push: on \(default\)/);
+  });
+
+  it("set is idempotent — repeating the same value does not error (AC #5)", async () => {
+    const { exitCode: first } = await invokeCLI("push", "set", "on");
+    const { exitCode: second } = await invokeCLI("push", "set", "on");
+    assert.equal(first, null);
+    assert.equal(second, null);
+  });
+
+  it("rejects an unrecognised value", async () => {
+    const { err, exitCode } = await invokeCLI("push", "set", "wat");
+    assert.ok(exitCode !== null && exitCode > 0);
+    assert.match(err, /expected on\|off/);
+  });
+});

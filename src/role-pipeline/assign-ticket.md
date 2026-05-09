@@ -256,6 +256,14 @@ Never use `--no-verify`. Fix hook failures at the root cause.
 
 **5. Route by `$MODE`** (set in Step 2): `stamp` → 5a, `plain` → 5b, `local-stamp` → 5c.
 
+**Push gate (AGT-099).** If your appended system context includes a `# Push step: disabled by oteam config` block, the operator has set `push: off` in `~/.open-team/config.json`. Run every step in 5a/5b/5c up to (but not including) the outbound push command, then print:
+
+```
+push disabled by oteam config; merge commit is local at <sha>; run 'git push origin' manually when ready
+```
+
+substituting `<sha>` with `git rev-parse HEAD` after the merge (5a/5c) or after the last feature commit (5b). In 5b/5c, also skip `gh pr create` and leave `linked-pr:` empty — there is no pushed branch for the PR to reference. Note the held push in the wrap-up comment. Step 6 (stamp retro routing) still runs because it does not depend on the push.
+
 #### 5a — Stamp-protected repo
 
 Run review and merge. Capture the review's combined output (stdout + stderr) to a known tempfile so Step 6 can route any `STAMP-RETRO` candidates the reviewers emit. Re-run the entire `tee` block on every round of the 5-round iteration — `$STAMP_REVIEW_OUT` is reassigned to a fresh `mktemp` each round, so Step 6 reads only the last (gate-opening) run; prior tempfiles are left behind for the OS to reap.
