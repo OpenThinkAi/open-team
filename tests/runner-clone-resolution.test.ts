@@ -109,6 +109,7 @@ describe("resolveCloneUriForAssign — stamp-enforce gate", () => {
     productDownshift: true,
     telemetry: { enabled: true },
     botIdentity: "",
+    push: "on",
   };
 
   function makeConfig(enforce: boolean, repoUri: string = githubUri): OteamConfig {

@@ -240,8 +240,78 @@ describe("config: empty state", () => {
       productDownshift: true,
       telemetry: { enabled: true },
       botIdentity: "",
+      push: "on",
     });
     assert.ok(!existsSync(cfg.configPath()));
+  });
+});
+
+describe("config: push toggle (AGT-099)", () => {
+  it("getPush defaults to 'on' when nothing is set", () => {
+    assert.equal(cfg.getPush(), "on");
+  });
+
+  it("setPush('off') round-trips on disk and through readConfig", () => {
+    const next = cfg.setPush("off");
+    assert.equal(next, "off");
+    assert.equal(cfg.getPush(), "off");
+    const persisted = JSON.parse(readFileSync(cfg.configPath(), "utf8"));
+    assert.equal(persisted.push, "off");
+  });
+
+  it("setPush('on') is the default and is omitted from on-disk JSON", () => {
+    cfg.setPush("off");
+    cfg.setPush("on");
+    assert.equal(cfg.getPush(), "on");
+    const persisted = JSON.parse(readFileSync(cfg.configPath(), "utf8"));
+    assert.equal(persisted.push, undefined);
+  });
+
+  it("re-running setPush with the same value is idempotent (AC #5)", () => {
+    cfg.setPush("on");
+    cfg.setPush("on");
+    assert.equal(cfg.getPush(), "on");
+    cfg.setPush("off");
+    cfg.setPush("off");
+    assert.equal(cfg.getPush(), "off");
+  });
+
+  it("absent push key normalises to 'on'", () => {
+    mkdirSync(cfg.configDir(), { recursive: true });
+    writeFileSync(
+      cfg.configPath(),
+      JSON.stringify({ vaults: {}, default: null }),
+    );
+    assert.equal(cfg.readConfig().push, "on");
+  });
+
+  it("explicit push: 'off' normalises to 'off'", () => {
+    mkdirSync(cfg.configDir(), { recursive: true });
+    writeFileSync(
+      cfg.configPath(),
+      JSON.stringify({ vaults: {}, default: null, push: "off" }),
+    );
+    assert.equal(cfg.readConfig().push, "off");
+  });
+
+  it("malformed push value normalises to default 'on'", () => {
+    mkdirSync(cfg.configDir(), { recursive: true });
+    writeFileSync(
+      cfg.configPath(),
+      JSON.stringify({ vaults: {}, default: null, push: "wat" }),
+    );
+    assert.equal(cfg.readConfig().push, "on");
+  });
+
+  it("setPush preserves vaults + default (config round-trip)", () => {
+    const vaultDir = join(fakeHome, "v");
+    mkdirSync(vaultDir);
+    cfg.addVault(vaultDir, { name: "personal" });
+    cfg.setPush("off");
+    const persisted = JSON.parse(readFileSync(cfg.configPath(), "utf8"));
+    assert.equal(persisted.vaults.personal, vaultDir);
+    assert.equal(persisted.default, "personal");
+    assert.equal(persisted.push, "off");
   });
 });
 

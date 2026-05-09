@@ -33,6 +33,9 @@ export interface TelemetryConfig {
   enabled: boolean;
 }
 
+/** AGT-099: global no-push toggle for the assign-side push step. */
+export type PushFlag = "on" | "off";
+
 export interface OteamConfig {
   vaults: Record<string, string>;
   default: string | null;
@@ -72,10 +75,21 @@ export interface OteamConfig {
    * Override per-invocation with the `OTEAM_BOT_IDENTITY` env var.
    */
   botIdentity: string;
+  /**
+   * AGT-099: global toggle for the assign-side push step. Default `"on"`.
+   * When `"off"`, the role-pipeline body's Phase 4b push step skips the
+   * outbound `git push` / `stamp push` and prints a status line directing
+   * the user to push manually. Read at spawn time and injected into the
+   * spawned agent's system prompt — the agent never reads config.json itself.
+   */
+  push: PushFlag;
 }
 
 /** AGT-107: the default for `productDownshift` — heuristic on. */
 const DEFAULT_PRODUCT_DOWNSHIFT = true;
+
+/** AGT-099: the default for `push` — outbound push enabled. */
+const DEFAULT_PUSH: PushFlag = "on";
 
 export interface ResolvedVault {
   name: string;
@@ -142,6 +156,11 @@ export function writeConfig(config: OteamConfig): void {
   if (config.botIdentity.length > 0) {
     onDisk.botIdentity = config.botIdentity;
   }
+  // AGT-099: push defaults to "on"; only persist when the user has flipped
+  // it off. Mirrors how default-on telemetry is omitted from disk.
+  if (config.push !== DEFAULT_PUSH) {
+    onDisk.push = config.push;
+  }
   const body = JSON.stringify(onDisk, null, 2) + "\n";
   writeFileSync(configPath(), body);
 }
@@ -156,6 +175,7 @@ function emptyConfig(): OteamConfig {
     productDownshift: DEFAULT_PRODUCT_DOWNSHIFT,
     telemetry: { enabled: true },
     botIdentity: "",
+    push: DEFAULT_PUSH,
   };
 }
 
@@ -285,6 +305,7 @@ function normalise(parsed: unknown): OteamConfig {
     models?: unknown;
     telemetry?: unknown;
     botIdentity?: unknown;
+    push?: unknown;
   };
   const vaults: Record<string, string> = {};
   if (obj.vaults && typeof obj.vaults === "object") {
@@ -305,7 +326,16 @@ function normalise(parsed: unknown): OteamConfig {
     productDownshift: normaliseProductDownshift(obj.models),
     telemetry: normaliseTelemetry(obj.telemetry),
     botIdentity: typeof obj.botIdentity === "string" ? obj.botIdentity.trim() : "",
+    push: normalisePush(obj.push),
   };
+}
+
+function normalisePush(value: unknown): PushFlag {
+  // AC #1 / #5: default "on". Only an explicit "off" flips the toggle;
+  // absent / null / unrecognised string all read as the default. Idempotent
+  // re-set is naturally satisfied because read-modify-write writes the same
+  // value back when the input matches the current state.
+  return value === "off" ? "off" : DEFAULT_PUSH;
 }
 
 function normaliseProductDownshift(value: unknown): boolean {
@@ -525,6 +555,17 @@ export function setTelemetryEnabled(enabled: boolean): TelemetryConfig {
   config.telemetry = { enabled };
   writeConfig(config);
   return config.telemetry;
+}
+
+export function getPush(): PushFlag {
+  return readConfig().push;
+}
+
+export function setPush(flag: PushFlag): PushFlag {
+  const config = readConfig();
+  config.push = flag;
+  writeConfig(config);
+  return config.push;
 }
 
 export function getBotIdentity(): string {

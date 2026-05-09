@@ -234,7 +234,15 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
     models: config.models,
   });
   const haikuDownshift = model === HAIKU_PRODUCT_MODEL && ticket.state === "triage";
-  const systemPrompt = composeSystemPrompt(ticket.id, projectContext, haikuDownshift);
+  // AGT-099: read the global push toggle once and pass an `off` signal into
+  // the system prompt so the spawned agent skips the Phase 4b push step.
+  const pushDisabled = config.push === "off";
+  const systemPrompt = composeSystemPrompt(
+    ticket.id,
+    projectContext,
+    haikuDownshift,
+    pushDisabled,
+  );
 
   // AGT-108: mint a deterministic session UUID + start timestamp before
   // spawning. `--session-id` pins the per-message JSONL Claude Code writes
@@ -488,22 +496,28 @@ function loadProjectContext(
 }
 
 /**
- * Combine the project-context payload (AGT-023) and the AGT-107 haiku-
- * downshift hint into a single `--append-system-prompt` payload. Returns
- * null when neither is active so the spawn skips the flag entirely.
+ * Combine the project-context payload (AGT-023), the AGT-107 haiku-downshift
+ * hint, and the AGT-099 push-disabled hint into a single
+ * `--append-system-prompt` payload. Returns null when none are active so
+ * the spawn skips the flag entirely.
  *
  * The haiku-downshift hint tells the Product agent to mark its comment
  * header as `(haiku-downshift)`. Putting the signal here (single source of
- * truth) keeps the agent from re-running the heuristic itself.
+ * truth) keeps the agent from re-running the heuristic itself. The
+ * push-disabled hint tells the Engineering agent to skip the Phase 4b
+ * outbound push and print a status line instead, so the agent does not
+ * have to read `~/.open-team/config.json` itself (AC #3).
  */
 function composeSystemPrompt(
   ticketId: string,
   projectContext: string | null,
   haikuDownshift: boolean,
+  pushDisabled: boolean,
 ): SystemPromptHandle | null {
   const parts: string[] = [];
   if (projectContext) parts.push(projectContext);
   if (haikuDownshift) parts.push(haikuDownshiftPromptHint());
+  if (pushDisabled) parts.push(pushDisabledPromptHint());
   if (parts.length === 0) return null;
   const content = parts.join("\n\n");
   // Tmp file is reused per ticket so re-spawns overwrite cleanly and stale
@@ -525,6 +539,22 @@ function haikuDownshiftPromptHint(): string {
     "    ### YYYY-MM-DD — Product agent (haiku-downshift)",
     "",
     "instead of the standard `### YYYY-MM-DD — Product agent`. That makes the heuristic visible in the ticket's audit trail.",
+  ].join("\n");
+}
+
+function pushDisabledPromptHint(): string {
+  return [
+    "# Push step: disabled by oteam config",
+    "",
+    "AGT-099: the operator has set `push: off` in `~/.open-team/config.json`. When you reach Phase 4b's outbound push (Step 5a `stamp push`, Step 5b `git push -u origin <feature>`, or Step 5c `git push -u origin <feature>` after the local stamp-merge), do NOT run it. Run every step before the push as normal — review, status gate, stamp-merge — but stop short of the push command itself.",
+    "",
+    "Instead of pushing, print this status line verbatim (substituting `<sha>` with the SHA of the most recent commit on the branch about to be pushed — `git rev-parse HEAD` after the merge in 5a/5c, or after the last feature commit in 5b):",
+    "",
+    "    push disabled by oteam config; merge commit is local at <sha>; run 'git push origin' manually when ready",
+    "",
+    "Then continue with the rest of Phase 4b (PR creation in 5b/5c is also skipped, since there is nothing pushed for `gh pr create` to reference; record `linked-pr:` as empty and note in the wrap-up comment that the push was held). Step 6 (stamp retro routing) still runs because it does not depend on any push.",
+    "",
+    "This gate covers only the assign-side push step. Ingest commands (`oteam pull github`) are unaffected.",
   ].join("\n");
 }
 
