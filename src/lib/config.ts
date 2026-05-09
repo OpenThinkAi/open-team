@@ -228,7 +228,7 @@ export function removeVault(nameOrPath: string): RemoveVaultResult {
   const config = readConfig();
   const name = findEntry(config, nameOrPath);
   if (!name) {
-    throw new Error(`no vault registered as "${nameOrPath}"`);
+    throw new Error(`no workspace registered as "${nameOrPath}"`);
   }
   delete config.vaults[name];
   let cleared = false;
@@ -244,7 +244,7 @@ export function setDefault(nameOrPath: string): string {
   const config = readConfig();
   const name = findEntry(config, nameOrPath);
   if (!name) {
-    throw new Error(`no vault registered as "${nameOrPath}"`);
+    throw new Error(`no workspace registered as "${nameOrPath}"`);
   }
   config.default = name;
   writeConfig(config);

@@ -140,7 +140,7 @@ describe("config: removeVault", () => {
   });
 
   it("throws on unknown name", async () => {
-    assert.throws(() => cfg.removeVault("nope"), /no vault registered/);
+    assert.throws(() => cfg.removeVault("nope"), /no workspace registered/);
   });
 });
 
@@ -157,7 +157,7 @@ describe("config: setDefault", () => {
   });
 
   it("throws on unknown name", async () => {
-    assert.throws(() => cfg.setDefault("nope"), /no vault registered/);
+    assert.throws(() => cfg.setDefault("nope"), /no workspace registered/);
   });
 });
 
