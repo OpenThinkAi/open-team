@@ -49,6 +49,16 @@ export interface OteamConfig {
    * Off means `recordPhase()` short-circuits — no JSONL writes occur.
    */
   telemetry: TelemetryConfig;
+  /**
+   * GitHub login that `oteam assign` claims an issue under (sets `assignees`
+   * on the underlying GH issue) before driving the role pipeline. Empty
+   * string means "no claim attempted" — backwards-compatible with configs
+   * that predate this field. Set to enable double-pickup protection across
+   * multiple agents/operators.
+   *
+   * Override per-invocation with the `OTEAM_BOT_IDENTITY` env var.
+   */
+  botIdentity: string;
 }
 
 /** AGT-107: the default for `productDownshift` — heuristic on. */
@@ -111,6 +121,10 @@ export function writeConfig(config: OteamConfig): void {
   if (!config.telemetry.enabled) {
     onDisk.telemetry = config.telemetry;
   }
+  // botIdentity is opt-in (default empty); only persist when set.
+  if (config.botIdentity.length > 0) {
+    onDisk.botIdentity = config.botIdentity;
+  }
   const body = JSON.stringify(onDisk, null, 2) + "\n";
   writeFileSync(configPath(), body);
 }
@@ -123,6 +137,7 @@ function emptyConfig(): OteamConfig {
     models: {},
     productDownshift: DEFAULT_PRODUCT_DOWNSHIFT,
     telemetry: { enabled: true },
+    botIdentity: "",
   };
 }
 
@@ -250,6 +265,7 @@ function normalise(parsed: unknown): OteamConfig {
     stamp?: unknown;
     models?: unknown;
     telemetry?: unknown;
+    botIdentity?: unknown;
   };
   const vaults: Record<string, string> = {};
   if (obj.vaults && typeof obj.vaults === "object") {
@@ -268,6 +284,7 @@ function normalise(parsed: unknown): OteamConfig {
     models: normaliseModels(obj.models),
     productDownshift: normaliseProductDownshift(obj.models),
     telemetry: normaliseTelemetry(obj.telemetry),
+    botIdentity: typeof obj.botIdentity === "string" ? obj.botIdentity.trim() : "",
   };
 }
 
@@ -463,6 +480,40 @@ export function setTelemetryEnabled(enabled: boolean): TelemetryConfig {
   config.telemetry = { enabled };
   writeConfig(config);
   return config.telemetry;
+}
+
+export function getBotIdentity(): string {
+  return readConfig().botIdentity;
+}
+
+export function setBotIdentity(login: string): string {
+  const trimmed = login.trim();
+  if (trimmed.length === 0) {
+    throw new Error(
+      "bot identity cannot be empty — pass a GitHub login (use `oteam config bot-identity clear` to remove)",
+    );
+  }
+  const config = readConfig();
+  config.botIdentity = trimmed;
+  writeConfig(config);
+  return trimmed;
+}
+
+export function clearBotIdentity(): void {
+  const config = readConfig();
+  config.botIdentity = "";
+  writeConfig(config);
+}
+
+/**
+ * Resolve the effective bot identity for a single `oteam assign` invocation.
+ * `OTEAM_BOT_IDENTITY` takes precedence over the persisted config; empty
+ * string means "no claim attempted" — the caller skips the claim entirely.
+ */
+export function resolveBotIdentity(config: OteamConfig = readConfig()): string {
+  const env = process.env.OTEAM_BOT_IDENTITY;
+  if (typeof env === "string" && env.trim().length > 0) return env.trim();
+  return config.botIdentity;
 }
 
 export function clearModel(phase: Phase): ModelsConfig {

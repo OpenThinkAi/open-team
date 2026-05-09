@@ -238,6 +238,7 @@ describe("config: empty state", () => {
       models: {},
       productDownshift: true,
       telemetry: { enabled: true },
+      botIdentity: "",
     });
     assert.ok(!existsSync(cfg.configPath()));
   });
@@ -654,5 +655,62 @@ describe("config: productDownshift (AGT-107)", () => {
     const r = cfg.readConfig();
     assert.deepEqual(r.models, { product: "claude-haiku-4-5" });
     assert.equal(r.productDownshift, false);
+  });
+});
+
+describe("config: botIdentity", () => {
+  it("default is empty (no claim attempted) on a fresh install", () => {
+    assert.equal(cfg.getBotIdentity(), "");
+  });
+
+  it("setBotIdentity persists and trims whitespace", () => {
+    cfg.setBotIdentity("  shallow-alchemy  ");
+    assert.equal(cfg.getBotIdentity(), "shallow-alchemy");
+    const onDisk = JSON.parse(readFileSync(cfg.configPath(), "utf8"));
+    assert.equal(onDisk.botIdentity, "shallow-alchemy");
+  });
+
+  it("setBotIdentity rejects empty / whitespace-only input", () => {
+    assert.throws(() => cfg.setBotIdentity(""), /cannot be empty/);
+    assert.throws(() => cfg.setBotIdentity("   "), /cannot be empty/);
+  });
+
+  it("clearBotIdentity removes the field from disk", () => {
+    cfg.setBotIdentity("shallow-alchemy");
+    cfg.clearBotIdentity();
+    assert.equal(cfg.getBotIdentity(), "");
+    const onDisk = JSON.parse(readFileSync(cfg.configPath(), "utf8"));
+    assert.equal(onDisk.botIdentity, undefined);
+  });
+
+  it("empty botIdentity is omitted from the on-disk JSON", () => {
+    // Trigger a write without ever setting bot_identity.
+    const vault = join(fakeHome, "v");
+    mkdirSync(vault, { recursive: true });
+    cfg.addVault(vault);
+    const onDisk = JSON.parse(readFileSync(cfg.configPath(), "utf8"));
+    assert.equal(onDisk.botIdentity, undefined);
+  });
+
+  it("OTEAM_BOT_IDENTITY env var overrides config", () => {
+    cfg.setBotIdentity("from-config");
+    process.env.OTEAM_BOT_IDENTITY = "from-env";
+    try {
+      assert.equal(cfg.resolveBotIdentity(), "from-env");
+    } finally {
+      delete process.env.OTEAM_BOT_IDENTITY;
+    }
+  });
+
+  it("falls back to config when env var is absent or empty", () => {
+    cfg.setBotIdentity("from-config");
+    delete process.env.OTEAM_BOT_IDENTITY;
+    assert.equal(cfg.resolveBotIdentity(), "from-config");
+    process.env.OTEAM_BOT_IDENTITY = "   ";
+    try {
+      assert.equal(cfg.resolveBotIdentity(), "from-config");
+    } finally {
+      delete process.env.OTEAM_BOT_IDENTITY;
+    }
   });
 });

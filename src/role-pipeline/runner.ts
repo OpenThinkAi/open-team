@@ -7,8 +7,14 @@ import {
   findVaultRootForPath,
   getTelemetryEnabled,
   readConfig,
+  resolveBotIdentity,
   type OteamConfig,
 } from "../lib/config.ts";
+import {
+  claimGitHubIssue,
+  parseIssueRef,
+  type IssueClaim,
+} from "../lib/github.ts";
 import {
   envSourcingPrefix,
   findKittyBinary,
@@ -103,6 +109,14 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
       `assign: could not parse ticket at ${ticketPath} (frontmatter unreadable)`,
     );
   }
+
+  // Pre-flight: claim the underlying GH issue (when configured + applicable).
+  // Only fires for github-sourced tickets with a parseable URL and an
+  // operator-set `botIdentity` (or OTEAM_BOT_IDENTITY env override). The
+  // unconfigured path is a silent no-op so legacy installs keep working.
+  // On any non-ok outcome the runner exits before any expensive work
+  // (workspace prep, kitty spawn, claude SDK init).
+  enforceClaimOrExit(ticket.source, config);
 
   // Make sure the spawned `claude` session can find `/assign-ticket`.
   installRolePipelineSlashCommand();
@@ -486,4 +500,53 @@ function readMonitoredOrgsFromEnv(): string[] {
   const raw = process.env.OTEAM_MONITORED_ORGS;
   if (!raw) return [];
   return raw.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+}
+
+/**
+ * Run the GH-issue claim pre-flight when applicable. Exits the process on
+ * any non-ok outcome (assigned-elsewhere, closed, no-write-access,
+ * api-error). The unconfigured / non-github path is a silent no-op.
+ */
+function enforceClaimOrExit(
+  source: { type: string; url: string | null },
+  config: OteamConfig,
+): void {
+  if (source.type !== "github" || !source.url) return;
+
+  const identity = resolveBotIdentity(config);
+  if (identity.length === 0) return; // back-compat: no identity set, no claim
+
+  const ref = parseIssueRef(source.url);
+  if (!ref) {
+    process.stderr.write(
+      `oteam assign: ticket source.url "${source.url}" is not a parseable github issue ref — skipping claim\n`,
+    );
+    return;
+  }
+
+  const claim: IssueClaim = claimGitHubIssue(ref.slug, ref.number, identity);
+  if (claim.ok) return;
+
+  switch (claim.reason) {
+    case "issue-closed":
+      process.stderr.write(
+        `oteam assign: refusing to drive role pipeline — ${ref.slug}#${ref.number} is closed\n`,
+      );
+      process.exit(1);
+    case "already-claimed":
+      process.stderr.write(
+        `oteam assign: refusing to drive role pipeline — ${ref.slug}#${ref.number} is assigned to ${claim.assignees.join(", ")} (not "${identity}")\n`,
+      );
+      process.exit(1);
+    case "no-write-access":
+      process.stderr.write(
+        `oteam assign: cannot claim ${ref.slug}#${ref.number} as "${identity}" — gh token has no push access on the repo (assignee changes are silently dropped). Add the operator as a collaborator, or unset botIdentity if claims aren't wanted on this repo.\n`,
+      );
+      process.exit(1);
+    case "api-error":
+      process.stderr.write(
+        `oteam assign: claim failed for ${ref.slug}#${ref.number} — ${claim.error}\n`,
+      );
+      process.exit(1);
+  }
 }
