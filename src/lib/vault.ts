@@ -31,7 +31,7 @@ export function resolveVault(opts: ResolveOptions = {}): ResolvedVault {
     const fromFlag = resolveByNameOrPath(opts.flagValue, config);
     if (!fromFlag) {
       throw new Error(
-        `--vault: "${opts.flagValue}" is not a registered name and not a path`,
+        `--workspace: "${opts.flagValue}" is not a registered workspace name or path`,
       );
     }
     return fromFlag;

@@ -1,4 +1,4 @@
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { runPull } from "./commands/pull.ts";
 import { runList } from "./commands/list.ts";
 import { runArchive } from "./commands/archive.ts";
@@ -16,19 +16,19 @@ const program = new Command();
 program
   .name("oteam")
   .description(
-    "Source-agnostic vault-driven role pipeline for spawning Claude agents against tickets",
+    "Source-agnostic workspace-driven role pipeline for spawning Claude agents against tickets",
   )
   .version(pkg.version);
 
 async function handlePull(
   source: string,
   ref: string,
-  opts: { vault?: string; project?: string; cloneUri?: string },
+  opts: { workspace?: string; vault?: string; project?: string; cloneUri?: string },
 ): Promise<void> {
   const result = await runPull({
     source,
     ref,
-    vault: opts.vault,
+    vault: opts.workspace ?? opts.vault,
     project: opts.project,
     cloneUri: opts.cloneUri,
   });
@@ -39,9 +39,10 @@ async function handlePull(
 program
   .command("pull <source> <ref>")
   .description(
-    "Ingest an external item into the vault as a triage ticket (sources: github)",
+    "Ingest an external item into the workspace as a triage ticket (sources: github)",
   )
-  .option("--vault <name-or-path>", "Use a specific registered vault")
+  .option("-w, --workspace <name-or-path>", "Use a specific registered workspace")
+  .addOption(new Option("--vault <name-or-path>").hideHelp())
   .option(
     "--project <name>",
     "Tag the ticket with a project name (defaults to the source repo's bare name)",
@@ -53,13 +54,14 @@ program
   .action(handlePull);
 
 // `ingest` is the literal verb AC #2 enumerates; `pull` is the user-facing
-// verb per AC #8 ("vault pulls, not source pushes") and Spike Decision 5.
+// verb per AC #8 ("workspace pulls, not source pushes") and Spike Decision 5.
 // Hidden alias keeps both ACs satisfied without doubling the documented
 // surface — `oteam ingest <source> <ref>` runs the same handler as `pull`.
 program
   .command("ingest <source> <ref>", { hidden: true })
   .description("Hidden alias for `pull`.")
-  .option("--vault <name-or-path>", "Use a specific registered vault")
+  .option("-w, --workspace <name-or-path>", "Use a specific registered workspace")
+  .addOption(new Option("--vault <name-or-path>").hideHelp())
   .option(
     "--project <name>",
     "Tag the ticket with a project name (defaults to the source repo's bare name)",
@@ -79,23 +81,24 @@ program
     "--inline",
     "Run the role pipeline in the current terminal instead of spawning kitty",
   )
-  .option("--vault <name-or-path>", "Use a specific registered vault")
+  .option("-w, --workspace <name-or-path>", "Use a specific registered workspace")
+  .addOption(new Option("--vault <name-or-path>").hideHelp())
   .action(
     async (
       ticketPath: string,
-      opts: { inline?: boolean; vault?: string },
+      opts: { inline?: boolean; workspace?: string; vault?: string },
     ) => {
       await assignTicket({
         ticketPath,
         workInline: opts.inline,
-        vault: opts.vault,
+        vault: opts.workspace ?? opts.vault,
       });
     },
   );
 
 program
   .command("list")
-  .description("List tickets in the vault (filter by structured frontmatter or grep)")
+  .description("List tickets in the workspace (filter by structured frontmatter or grep)")
   .option("--state <state>", "Filter by ticket state (triage|refined|...)")
   .option("--project <name>", "Filter by project name (case-insensitive)")
   .option("--repo <slug>", "Filter by repo frontmatter (case-insensitive)")
@@ -118,9 +121,10 @@ program
   )
   .option(
     "--include-archived",
-    "Also search <vault>/archive/ (excluded by default)",
+    "Also search <workspace>/archive/ (excluded by default)",
   )
-  .option("--vault <name-or-path>", "Use a specific registered vault")
+  .option("-w, --workspace <name-or-path>", "Use a specific registered workspace")
+  .addOption(new Option("--vault <name-or-path>").hideHelp())
   .action(
     (opts: {
       state?: string;
@@ -133,6 +137,7 @@ program
       match?: string;
       grep?: string;
       includeArchived?: boolean;
+      workspace?: string;
       vault?: string;
     }) => {
       if (opts.state && !(TICKET_STATES as readonly string[]).includes(opts.state)) {
@@ -141,16 +146,17 @@ program
         );
         process.exit(2);
       }
-      process.stdout.write(runList(opts) + "\n");
+      process.stdout.write(runList({ ...opts, vault: opts.workspace ?? opts.vault }) + "\n");
     },
   );
 
 program
   .command("archive <ticket-id>")
   .description("Move a done ticket to archive/YYYY-MM/")
-  .option("--vault <name-or-path>", "Use a specific registered vault")
-  .action((ticketID: string, opts: { vault?: string }) => {
-    const path = runArchive({ ticketID, vault: opts.vault });
+  .option("-w, --workspace <name-or-path>", "Use a specific registered workspace")
+  .addOption(new Option("--vault <name-or-path>").hideHelp())
+  .action((ticketID: string, opts: { workspace?: string; vault?: string }) => {
+    const path = runArchive({ ticketID, vault: opts.workspace ?? opts.vault });
     process.stdout.write(`✅ Archived\n   ${path}\n`);
   });
 

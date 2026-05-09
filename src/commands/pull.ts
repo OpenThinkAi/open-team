@@ -37,7 +37,7 @@ export async function runPull(opts: PullOptions): Promise<PullResult> {
   const triageDir = join(vault, "tickets", "triage");
   if (!existsSync(triageDir)) {
     throw new Error(
-      `vault triage dir missing at ${triageDir} — create it or set PRODUCT_VAULT_PATH`,
+      `workspace triage dir missing at ${triageDir} — create it or set PRODUCT_VAULT_PATH`,
     );
   }
 
