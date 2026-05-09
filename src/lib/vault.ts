@@ -84,7 +84,7 @@ export function findTicketFileByID(vaultPath: string, ticketID: string): string 
     });
   } catch {
     throw new Error(
-      `vault has no tickets/ directory at ${ticketsRoot}`,
+      `workspace has no tickets/ directory at ${ticketsRoot}`,
     );
   }
 

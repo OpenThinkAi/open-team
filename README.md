@@ -156,7 +156,7 @@ oteam config stamp set --enforce off  # … or back off
 oteam config stamp clear              # remove the stamp block entirely
 ```
 
-Stale workspaces from prior assigns are GC'd at spawn time: any `/tmp/open-team-issues/agt-N/` directory whose ticket id has no matching ticket in the active vault is `rm -rf`'d before the new clone. The current run's workspace is also `rm -rf`'d before its clone, so re-assigns are hermetic.
+Stale workspaces from prior assigns are GC'd at spawn time: any `/tmp/open-team-issues/agt-N/` directory whose ticket id has no matching ticket in the active workspace is `rm -rf`'d before the new clone. The current run's workspace is also `rm -rf`'d before its clone, so re-assigns are hermetic.
 
 ## Per-phase model selection
 
@@ -252,7 +252,7 @@ Paths are resolved to absolute at `add` time, so the registration survives `cd`.
 
 ## Claim-on-assign (preventing double-pickup)
 
-When multiple operators or agents work the same vault, two of them can race on the same ticket — both run `oteam assign` and both spin up role pipelines against the same GitHub issue. To prevent that, `oteam assign` can claim the underlying GH issue (sets `assignees`) before driving the pipeline:
+When multiple operators or agents work the same workspace, two of them can race on the same ticket — both run `oteam assign` and both spin up role pipelines against the same GitHub issue. To prevent that, `oteam assign` can claim the underlying GH issue (sets `assignees`) before driving the pipeline:
 
 ```sh
 oteam config bot-identity set <github-login>      # e.g. your own login, or a dedicated bot account
