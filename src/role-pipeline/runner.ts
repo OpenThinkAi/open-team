@@ -6,10 +6,16 @@ import { resolve, basename, dirname, join } from "node:path";
 import {
   findVaultRootForPath,
   getTelemetryEnabled,
+  getRepoEntry,
   readConfig,
   resolveBotIdentity,
+  setRepoCloneUri,
   type OteamConfig,
 } from "../lib/config.ts";
+import {
+  NoTTYError,
+  promptCloneUri,
+} from "../lib/prompt-clone-uri.ts";
 import {
   claimGitHubIssue,
   parseIssueRef,
@@ -44,9 +50,7 @@ import {
 } from "../lib/vault.ts";
 import {
   prepareAgentWorkspace,
-  StampGateError,
   type PreparedWorkspace,
-  type WorkspaceSource,
 } from "../lib/workspace.ts";
 import { installRolePipelineSlashCommand } from "./install-slash-command.ts";
 
@@ -56,30 +60,91 @@ export interface AssignOptions {
   monitoredOrgs?: string[];
   workInline?: boolean;
   /**
-   * Per-run override of the `stamp.enforce` config knob. Forces the agent
-   * worktree to be cloned from `git@github.com:<repo>.git` regardless of
-   * what oteam config says. Has no effect when stamp enforcement is already
-   * off (the default). Documented in `oteam assign --help` as a one-shot
-   * escape hatch; the durable setting is `oteam config stamp set --enforce off`.
+   * Per-run override of the `stamp.enforce` config knob. Skips the stamp-host
+   * URI-match check for this single run. Has no effect when stamp enforcement
+   * is already off (the default). The recorded clone URI is still used —
+   * `--no-stamp` only bypasses the URI-must-match-stamp-host assertion.
+   * (AGT-098 will retire this flag once the surface settles.)
    */
   noStamp?: boolean;
+  /**
+   * Injectable URI resolver for testing — bypasses the config lookup and
+   * prompt so unit tests can exercise the runner logic without I/O.
+   */
+  cloneUriResolver?: CloneUriResolver;
 }
 
-function resolveWorkspaceMode(
+export type CloneUriResolver = (slug: string) => Promise<string>;
+
+/**
+ * Resolve the clone URI for `oteam assign`:
+ * 1. Look up `config.repos[slug]`; if found, return its clone-uri.
+ * 2. Prompt on first encounter (interactive only); record the result.
+ * 3. On non-TTY without a recorded URI: throw `NoTTYError` (AC #4).
+ * 4. When `stamp.enforce: true && !noStamp`: assert the URI starts with
+ *    `stamp.host`; throw a `StampEnforceError` otherwise.
+ */
+async function resolveCloneUriForAssign(
   config: OteamConfig,
+  slug: string,
   noStamp: boolean,
-): WorkspaceSource {
-  if (noStamp) return "github";
-  if (config.stamp?.enforce) {
+  resolver?: CloneUriResolver,
+): Promise<string> {
+  // Injection point for tests.
+  if (resolver) return resolver(slug);
+
+  const existing = getRepoEntry(slug, config);
+  let uri: string;
+  if (existing) {
+    uri = existing["clone-uri"];
+  } else {
+    const defaultUri = `https://github.com/${slug}.git`;
+    const result = await promptCloneUri(
+      slug,
+      defaultUri,
+      { isTTY: process.stdin.isTTY === true },
+      "refuse",
+    );
+    uri = result.uri;
+    setRepoCloneUri(slug, uri);
+  }
+
+  // Stamp-enforce check (AC #6): when enforce is on and --no-stamp is NOT
+  // set, the recorded URI must start with stamp.host.
+  if (!noStamp && config.stamp?.enforce) {
     if (!config.stamp.host || config.stamp.host.length === 0) {
-      // G3 (AGT-096): hand-edited config can reach this state. Loud, fast.
+      // G3: hand-edited config. Loud, fast.
       throw new Error(
         "oteam assign: stamp.enforce is on but stamp.host is empty — run 'oteam config stamp set --host <url>' or 'oteam config stamp set --enforce off'",
       );
     }
-    return "stamp";
+    if (!uri.startsWith(config.stamp.host)) {
+      throw new StampEnforceError({ slug, uri, stampHost: config.stamp.host });
+    }
   }
-  return "github";
+
+  return uri;
+}
+
+export class StampEnforceError extends Error {
+  readonly slug: string;
+  readonly uri: string;
+  constructor(args: { slug: string; uri: string; stampHost: string }) {
+    const lines = [
+      `oteam assign: ${args.slug} clone URI is not stamp-governed.`,
+      `  Recorded URI: ${args.uri}`,
+      `  Expected URI starting with: ${args.stampHost}`,
+      `  Fix: update the recorded URI:`,
+      `    oteam config repo set ${args.slug} --clone-uri <stamp-url>`,
+      `  Or turn enforcement off:`,
+      `    oteam config stamp set --enforce off`,
+      `  Or pass --no-stamp to bypass this gate for a single run.`,
+    ];
+    super(lines.join("\n"));
+    this.name = "StampEnforceError";
+    this.slug = args.slug;
+    this.uri = args.uri;
+  }
 }
 
 export async function assignTicket(opts: AssignOptions): Promise<void> {
@@ -128,36 +193,43 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
     );
   }
 
-  // AGT-096: pick the clone source from oteam config. With `stamp.enforce:
-  // true` the AGT-050 stamp gate fires (clone from stamp; failure exits
-  // non-zero). With anything else (no stamp, or `stamp.enforce: false`) the
-  // worktree is cloned from GitHub directly. The legacy `--no-stamp` flag
-  // forces the github path regardless — it's a per-run override of the
-  // enforce config knob (AGT-098 will retire the flag once the surface
-  // settles).
+  // AGT-097: resolve the clone URI from the per-repo config map. First
+  // encounter prompts once (interactive) or refuses (non-TTY). When
+  // stamp.enforce is on and --no-stamp is not set, the URI must start with
+  // stamp.host. --no-stamp skips only the URI-match check; the recorded URI
+  // is still used. (AGT-098 will retire the flag once the surface settles.)
   let workspace: PreparedWorkspace | null = null;
   if (ticket.repo) {
-    const mode = resolveWorkspaceMode(config, opts.noStamp ?? false);
+    let cloneUri: string;
     try {
-      workspace = prepareAgentWorkspace({
-        ticketId: ticket.id,
-        repoSlug: ticket.repo,
-        mode,
-        stampHost: mode === "stamp" ? config.stamp?.host : undefined,
-        activeTicketIds: collectActiveTicketIds(resolvedVault.path),
-      });
+      cloneUri = await resolveCloneUriForAssign(
+        config,
+        ticket.repo,
+        opts.noStamp ?? false,
+        opts.cloneUriResolver,
+      );
     } catch (err) {
-      if (err instanceof StampGateError) {
-        process.stderr.write(`${err.message}\n`);
+      if (err instanceof NoTTYError || err instanceof StampEnforceError) {
+        process.stderr.write(`${(err as Error).message}\n`);
         process.exit(1);
       }
       throw err;
     }
+    try {
+      workspace = prepareAgentWorkspace({
+        ticketId: ticket.id,
+        repoSlug: ticket.repo,
+        cloneUri,
+        activeTicketIds: collectActiveTicketIds(resolvedVault.path),
+      });
+    } catch (err) {
+      process.stderr.write(`${(err as Error).message}\n`);
+      process.exit(1);
+    }
     if (opts.noStamp && config.stamp?.enforce) {
-      // Loud only when the override actually changes behaviour. If the user
-      // is in no-enforce mode anyway, repeating the warning is just noise.
+      // Loud only when the override actually changes behaviour.
       process.stderr.write(
-        `oteam assign: --no-stamp set; cloned from ${workspace.originUrl}. The stamp gate is bypassed — verify any push manually.\n`,
+        `oteam assign: --no-stamp set; cloned from ${workspace!.originUrl}. The stamp enforce check is bypassed — verify any push manually.\n`,
       );
     }
   }

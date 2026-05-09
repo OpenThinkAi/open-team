@@ -21,6 +21,14 @@ export interface StampConfig {
   enforce: boolean;
 }
 
+/** A per-repo entry in the `repos` config map. */
+export interface RepoEntry {
+  /** The URI to clone from (also the `origin` after the clone). */
+  "clone-uri": string;
+  /** ISO timestamp of when this entry was first recorded. */
+  added: string;
+}
+
 export interface TelemetryConfig {
   enabled: boolean;
 }
@@ -30,6 +38,11 @@ export interface OteamConfig {
   default: string | null;
   /** Null/absent both mean "stamp integration is off". */
   stamp: StampConfig | null;
+  /**
+   * Per-repo clone URIs. Keys are `<owner>/<name>` (stored verbatim,
+   * looked up case-insensitively). Empty object omitted from disk.
+   */
+  repos: Record<string, RepoEntry>;
   /**
    * Per-phase model overrides for the role pipeline. Always an object;
    * empty `{}` means "no overrides — every phase uses ROLE_PIPELINE_MODEL".
@@ -104,6 +117,10 @@ export function writeConfig(config: OteamConfig): void {
     default: config.default,
     stamp: config.stamp,
   };
+  // Omit empty repos block from disk to keep a fresh config tidy.
+  if (Object.keys(config.repos).length > 0) {
+    onDisk.repos = config.repos;
+  }
   // AGT-107: the in-memory `productDownshift` flag is serialised as a
   // sibling of the per-phase model overrides at `models.productDownshift`.
   // Build a single on-disk `models` object so the two surfaces co-locate
@@ -134,6 +151,7 @@ function emptyConfig(): OteamConfig {
     vaults: {},
     default: null,
     stamp: null,
+    repos: {},
     models: {},
     productDownshift: DEFAULT_PRODUCT_DOWNSHIFT,
     telemetry: { enabled: true },
@@ -263,6 +281,7 @@ function normalise(parsed: unknown): OteamConfig {
     vaults?: unknown;
     default?: unknown;
     stamp?: unknown;
+    repos?: unknown;
     models?: unknown;
     telemetry?: unknown;
     botIdentity?: unknown;
@@ -281,6 +300,7 @@ function normalise(parsed: unknown): OteamConfig {
     vaults,
     default: def,
     stamp: normaliseStamp(obj.stamp),
+    repos: normaliseRepos(obj.repos),
     models: normaliseModels(obj.models),
     productDownshift: normaliseProductDownshift(obj.models),
     telemetry: normaliseTelemetry(obj.telemetry),
@@ -338,6 +358,31 @@ function normaliseStamp(value: unknown): StampConfig | null {
 
 function stripTrailingSlash(s: string): string {
   return s.replace(/\/+$/, "");
+}
+
+/** `<owner>/<name>` with no extra slashes. */
+const REPO_SLUG_RE = /^[^/]+\/[^/]+$/;
+
+function validateSlug(slug: string): void {
+  if (!REPO_SLUG_RE.test(slug.trim())) {
+    throw new Error(
+      `invalid repo slug "${slug}" — expected <owner>/<name> (e.g. OpenThinkAi/open-team)`,
+    );
+  }
+}
+
+function normaliseRepos(value: unknown): Record<string, RepoEntry> {
+  if (!value || typeof value !== "object") return {};
+  const out: Record<string, RepoEntry> = {};
+  for (const [slug, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (!REPO_SLUG_RE.test(slug)) continue;
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry as { "clone-uri"?: unknown; added?: unknown };
+    if (typeof e["clone-uri"] !== "string" || e["clone-uri"].trim().length === 0) continue;
+    if (typeof e.added !== "string") continue;
+    out[slug] = { "clone-uri": e["clone-uri"].trim(), added: e.added };
+  }
+  return out;
 }
 
 export function getStampConfig(): StampConfig | null {
@@ -503,6 +548,81 @@ export function clearBotIdentity(): void {
   const config = readConfig();
   config.botIdentity = "";
   writeConfig(config);
+}
+
+// ---------------------------------------------------------------------------
+// Per-repo URI tracking (AGT-097)
+// ---------------------------------------------------------------------------
+
+/**
+ * Look up a repo slug (case-insensitively). Returns null when not found.
+ */
+export function getRepoEntry(
+  slug: string,
+  config: OteamConfig = readConfig(),
+): RepoEntry | null {
+  const key = findRepoKey(config, slug);
+  return key ? config.repos[key] ?? null : null;
+}
+
+/**
+ * Add or update a repo entry. The slug is stored verbatim (case-insensitive
+ * lookup reuses the existing key when one already exists).
+ */
+export function setRepoCloneUri(slug: string, cloneUri: string): RepoEntry {
+  validateSlug(slug);
+  const trimmedUri = cloneUri.trim();
+  if (trimmedUri.length === 0) {
+    throw new Error(
+      `clone URI for "${slug}" cannot be empty — pass a valid git URL`,
+    );
+  }
+  const config = readConfig();
+  const existingKey = findRepoKey(config, slug);
+  const key = existingKey ?? slug;
+  const existing = existingKey ? config.repos[existingKey] : undefined;
+  config.repos[key] = {
+    "clone-uri": trimmedUri,
+    added: existing?.added ?? new Date().toISOString(),
+  };
+  writeConfig(config);
+  return config.repos[key]!;
+}
+
+export interface RepoListEntry {
+  slug: string;
+  entry: RepoEntry;
+}
+
+export function listRepoEntries(): RepoListEntry[] {
+  const config = readConfig();
+  return Object.entries(config.repos)
+    .map(([slug, entry]) => ({ slug, entry }))
+    .sort((a, b) => a.slug.localeCompare(b.slug));
+}
+
+/**
+ * Remove a repo entry. No-op if the slug is not present (idempotent per AC #2).
+ */
+export function removeRepoEntry(slug: string): boolean {
+  const config = readConfig();
+  const key = findRepoKey(config, slug);
+  if (!key) return false;
+  delete config.repos[key];
+  writeConfig(config);
+  return true;
+}
+
+/** Case-insensitive slug lookup — returns the stored key or null. */
+function findRepoKey(
+  config: OteamConfig,
+  slug: string,
+): string | null {
+  const lower = slug.toLowerCase();
+  for (const key of Object.keys(config.repos)) {
+    if (key.toLowerCase() === lower) return key;
+  }
+  return null;
 }
 
 /**

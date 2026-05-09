@@ -1,10 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { basename, join } from "node:path";
-
-function buildGithubUrl(repoSlug: string): string {
-  return `git@github.com:${repoSlug}.git`;
-}
+import { join } from "node:path";
 
 /**
  * Lives at `/tmp/open-team-issues/`. Every per-ticket workspace gets a
@@ -18,15 +14,11 @@ export const WORKSPACE_ROOT = "/tmp/open-team-issues";
 const TICKET_ID_RE = /^AGT-\d+$/;
 const ORPHAN_DIR_RE = /^agt-\d+$/;
 
-export type WorkspaceSource = "stamp" | "github";
-
 export interface PreparedWorkspace {
   /** Absolute path to the cloned worktree (i.e. `<root>/<ticket-id-lc>/repo`). */
   path: string;
   /** The URL we cloned from — also the worktree's `origin`. */
   originUrl: string;
-  /** Where we cloned from, for the runner's user-facing log line. */
-  source: WorkspaceSource;
 }
 
 export interface PrepareWorkspaceOptions {
@@ -35,24 +27,12 @@ export interface PrepareWorkspaceOptions {
   /** `<owner>/<name>` from the ticket's `repo:` frontmatter. */
   repoSlug: string;
   /**
-   * Where the agent worktree should clone from:
-   *  - `'stamp'`: clone from the stamp server (gated; failure throws
-   *    `StampGateError`). Requires `stampHost` to be set.
-   *  - `'github'`: clone from `git@github.com:<repo>.git` directly.
-   *    No gate — failure throws a plain `Error`.
-   *
-   * The runner picks the mode from oteam config (`stamp.enforce: true` →
-   * `'stamp'`; everything else → `'github'`). The legacy `--no-stamp` CLI
-   * flag forces `'github'` regardless.
+   * The git URI to clone from. Resolved by the runner from the per-repo config
+   * entry (after the first-encounter prompt if needed). The workspace module
+   * treats this as opaque — stamp enforcement and URI validation happen in the
+   * runner before this function is called.
    */
-  mode: WorkspaceSource;
-  /**
-   * Stamp server URL prefix (e.g. `ssh://git@host:port`). Required when
-   * `mode === 'stamp'`. Sourced from oteam's `stamp.host` config — this
-   * function does NOT read `~/.stamp/server.yml`, so AC #8 holds when the
-   * user has no stamp config in oteam.
-   */
-  stampHost?: string;
+  cloneUri: string;
   /**
    * Injectable git-clone runner. Default is `spawnSync('git', ['clone', ...])`.
    * Tests pass a fake to avoid real network I/O.
@@ -75,52 +55,12 @@ export interface CloneResult {
   stderr: string;
 }
 
-export class StampGateError extends Error {
-  readonly stampUrl: string | null;
-  readonly cloneStderr: string;
-  constructor(args: {
-    repoSlug: string;
-    stampUrl: string | null;
-    reason: string;
-    cloneStderr?: string;
-  }) {
-    // AC #6 (this ticket): error must name the affected repo, the URI we
-    // tried, and the configured stamp host (named via the URL we built),
-    // plus the remediation. Per-repo URI tracking is owned by the sibling
-    // assign-ticket rewrite ticket; for now the URI we name is the
-    // constructed stamp clone URL, the closest analogue.
-    const lines = [
-      `oteam assign: ${args.repoSlug} is not stamp-governed.`,
-    ];
-    if (args.stampUrl) {
-      lines.push(`  Tried: git clone ${args.stampUrl}`);
-    }
-    lines.push(
-      `  Reason: ${args.reason}`,
-      `  Fix: provision the repo on the stamp server with`,
-      `    stamp provision ${basename(args.repoSlug)}`,
-      `  Or turn enforcement off:`,
-      `    oteam config stamp set --enforce off`,
-      `  Or pass --no-stamp to bypass this gate for a single run.`,
-    );
-    super(lines.join("\n"));
-    this.name = "StampGateError";
-    this.stampUrl = args.stampUrl;
-    this.cloneStderr = args.cloneStderr ?? "";
-  }
-}
-
 /**
- * Prepares an isolated agent workspace and returns its path. In `'stamp'`
- * mode the clone IS the stamp-governance check (success ⇒ repo is on the
- * stamp server; failure ⇒ it isn't). In `'github'` mode the clone is
- * unconditional and any failure surfaces as a plain error.
- *
- * The original AGT-050 invariant ("primary checkout never modified") is
- * preserved by construction — this function only writes under
- * `WORKSPACE_ROOT`. AC #8 of AGT-096 ("no stamp config files are read")
- * holds because the stamp host arrives via `opts.stampHost` from oteam
- * config; this function does not touch `~/.stamp/server.yml`.
+ * Prepares an isolated agent workspace by cloning `cloneUri` into
+ * `<root>/<ticket-id-lc>/repo`. Stamp-enforcement and URI-match checks are
+ * the caller's responsibility (done by the runner's `resolveCloneUriForAssign`
+ * before this function is ever called). Any clone failure surfaces as a plain
+ * `Error` regardless of the URI scheme.
  */
 export function prepareAgentWorkspace(
   opts: PrepareWorkspaceOptions,
@@ -146,56 +86,14 @@ export function prepareAgentWorkspace(
   rmSync(ticketDir, { recursive: true, force: true });
   mkdirSync(ticketDir, { recursive: true });
 
-  const repoBasename = basename(opts.repoSlug);
   const cloneRunner = opts.cloneRunner ?? defaultCloneRunner;
-
-  if (opts.mode === "github") {
-    const url = buildGithubUrl(opts.repoSlug);
-    const r = cloneRunner(url, repoDir);
-    if (r.status !== 0) {
-      throw new Error(
-        `oteam assign: github clone failed (git clone ${url}):\n${r.stderr.trim() || "(no stderr)"}`,
-      );
-    }
-    return { path: repoDir, originUrl: url, source: "github" };
-  }
-
-  // mode === "stamp"
-  if (!opts.stampHost || opts.stampHost.trim().length === 0) {
-    // G3: enforce true with no host. The runner validates this earlier and
-    // surfaces a friendlier message; this branch defends against direct
-    // callers (and keeps the assertion local so the test matrix is sane).
+  const r = cloneRunner(opts.cloneUri, repoDir);
+  if (r.status !== 0) {
     throw new Error(
-      "prepareAgentWorkspace: mode='stamp' requires opts.stampHost (run 'oteam config stamp set --host <url>')",
+      `oteam assign: clone failed (git clone ${opts.cloneUri}):\n${r.stderr.trim() || "(no stderr)"}`,
     );
   }
-  const stampUrl = buildStampCloneUrl(opts.stampHost, repoBasename);
-  const r = cloneRunner(stampUrl, repoDir);
-  if (r.status !== 0) {
-    throw new StampGateError({
-      repoSlug: opts.repoSlug,
-      stampUrl,
-      reason: stampGateReason(r),
-      cloneStderr: r.stderr,
-    });
-  }
-  return { path: repoDir, originUrl: stampUrl, source: "stamp" };
-}
-
-function buildStampCloneUrl(host: string, repoBasename: string): string {
-  // `host` is the already-normalised value from oteam config — slash
-  // stripping happens once on read in config.ts. Building the URL here is
-  // pure concatenation.
-  return `${host}/srv/git/${repoBasename}.git`;
-}
-
-function stampGateReason(r: CloneResult): string {
-  const stderr = r.stderr.trim();
-  if (!stderr) return `git clone exited ${r.status}`;
-  // Compact the stderr to the most informative line for the error banner;
-  // the full output is still attached to the StampGateError.
-  const firstLine = stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
-  return `git clone exited ${r.status}: ${firstLine ?? "(no stderr)"}`;
+  return { path: repoDir, originUrl: opts.cloneUri };
 }
 
 const defaultCloneRunner: CloneRunner = (url, dest) => {

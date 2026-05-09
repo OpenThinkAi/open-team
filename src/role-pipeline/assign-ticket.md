@@ -77,19 +77,19 @@ WORKSPACE="/tmp/open-team-issues/$TICKET_ID_LC"
 # REPO_SLUG is "<owner>/<name>" from `repo:` if set, else inferred from the
 # ticket. When inferring, name it explicitly in your spike notes so the human
 # can correct you.
-REPO_BASE=$(basename "$REPO_SLUG")
 mkdir -p "$WORKSPACE"
 cd "$WORKSPACE"
 rm -rf repo
-SERVER_HOST=$(awk '/^host:/ { print $2 }' "$HOME/.stamp/server.yml" 2>/dev/null)
-SERVER_PORT=$(awk '/^port:/ { print $2 }' "$HOME/.stamp/server.yml" 2>/dev/null)
-if [ -n "$SERVER_HOST" ] && [ -n "$SERVER_PORT" ] && \
-   git clone "ssh://git@${SERVER_HOST}:${SERVER_PORT}/srv/git/${REPO_BASE}.git" repo 2>/dev/null; then
-    : # cloned from stamp; origin points at the stamp URL
-else
-    # No stamp config or repo not on stamp server — fall back to GitHub.
-    git clone "git@github.com:${REPO_SLUG}.git" repo
+# Look up the recorded clone URI. `oteam config repo show` prints two lines
+# (clone-uri: ..., added: ...) on success, or "(no entry for ...)" on miss.
+CLONE_URI=$(oteam config repo show "$REPO_SLUG" 2>/dev/null | awk '/^clone-uri:/ { print $2 }')
+if [ -z "$CLONE_URI" ]; then
+    # No recorded URI yet — fall back to the GitHub HTTPS default. Running
+    # `oteam assign` interactively will prompt once and record it; hand-running
+    # this slash command skips the prompt and uses the public default.
+    CLONE_URI="git@github.com:${REPO_SLUG}.git"
 fi
+git clone "$CLONE_URI" repo
 cd repo
 ```
 
