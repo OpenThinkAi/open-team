@@ -80,23 +80,15 @@ program
     "Run the role pipeline in the current terminal instead of spawning kitty",
   )
   .option("--vault <name-or-path>", "Use a specific registered vault")
-  .option(
-    "--no-stamp",
-    "Force a github clone for this run, overriding stamp.enforce in oteam config. The durable knob is 'oteam config stamp set --enforce off'.",
-  )
   .action(
     async (
       ticketPath: string,
-      opts: { inline?: boolean; vault?: string; stamp?: boolean },
+      opts: { inline?: boolean; vault?: string },
     ) => {
-      // commander's `--no-stamp` flag flips `opts.stamp` to `false` (default
-      // is `true` because the long form is `--no-stamp`). Translate to the
-      // explicit positive `noStamp` field that `assignTicket` consumes.
       await assignTicket({
         ticketPath,
         workInline: opts.inline,
         vault: opts.vault,
-        noStamp: opts.stamp === false,
       });
     },
   );

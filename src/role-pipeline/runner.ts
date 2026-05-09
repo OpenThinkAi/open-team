@@ -60,14 +60,6 @@ export interface AssignOptions {
   monitoredOrgs?: string[];
   workInline?: boolean;
   /**
-   * Per-run override of the `stamp.enforce` config knob. Skips the stamp-host
-   * URI-match check for this single run. Has no effect when stamp enforcement
-   * is already off (the default). The recorded clone URI is still used —
-   * `--no-stamp` only bypasses the URI-must-match-stamp-host assertion.
-   * (AGT-098 will retire this flag once the surface settles.)
-   */
-  noStamp?: boolean;
-  /**
    * Injectable URI resolver for testing — bypasses the config lookup and
    * prompt so unit tests can exercise the runner logic without I/O.
    */
@@ -80,14 +72,13 @@ export type CloneUriResolver = (slug: string) => Promise<string>;
  * Resolve the clone URI for `oteam assign`:
  * 1. Look up `config.repos[slug]`; if found, return its clone-uri.
  * 2. Prompt on first encounter (interactive only); record the result.
- * 3. On non-TTY without a recorded URI: throw `NoTTYError` (AC #4).
- * 4. When `stamp.enforce: true && !noStamp`: assert the URI starts with
- *    `stamp.host`; throw a `StampEnforceError` otherwise.
+ * 3. On non-TTY without a recorded URI: throw `NoTTYError`.
+ * 4. When `stamp.enforce: true`: assert the URI starts with `stamp.host`;
+ *    throw a `StampEnforceError` otherwise.
  */
-async function resolveCloneUriForAssign(
+export async function resolveCloneUriForAssign(
   config: OteamConfig,
   slug: string,
-  noStamp: boolean,
   resolver?: CloneUriResolver,
 ): Promise<string> {
   // Injection point for tests.
@@ -109,11 +100,10 @@ async function resolveCloneUriForAssign(
     setRepoCloneUri(slug, uri);
   }
 
-  // Stamp-enforce check (AC #6): when enforce is on and --no-stamp is NOT
-  // set, the recorded URI must start with stamp.host.
-  if (!noStamp && config.stamp?.enforce) {
+  // Stamp-enforce check: when enforce is on, the recorded URI must start with
+  // stamp.host. The durable knob to disable is 'oteam config stamp set --enforce off'.
+  if (config.stamp?.enforce) {
     if (!config.stamp.host || config.stamp.host.length === 0) {
-      // G3: hand-edited config. Loud, fast.
       throw new Error(
         "oteam assign: stamp.enforce is on but stamp.host is empty — run 'oteam config stamp set --host <url>' or 'oteam config stamp set --enforce off'",
       );
@@ -138,7 +128,6 @@ export class StampEnforceError extends Error {
       `    oteam config repo set ${args.slug} --clone-uri <stamp-url>`,
       `  Or turn enforcement off:`,
       `    oteam config stamp set --enforce off`,
-      `  Or pass --no-stamp to bypass this gate for a single run.`,
     ];
     super(lines.join("\n"));
     this.name = "StampEnforceError";
@@ -195,9 +184,7 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
 
   // AGT-097: resolve the clone URI from the per-repo config map. First
   // encounter prompts once (interactive) or refuses (non-TTY). When
-  // stamp.enforce is on and --no-stamp is not set, the URI must start with
-  // stamp.host. --no-stamp skips only the URI-match check; the recorded URI
-  // is still used. (AGT-098 will retire the flag once the surface settles.)
+  // stamp.enforce is on, the URI must start with stamp.host.
   let workspace: PreparedWorkspace | null = null;
   if (ticket.repo) {
     let cloneUri: string;
@@ -205,7 +192,6 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
       cloneUri = await resolveCloneUriForAssign(
         config,
         ticket.repo,
-        opts.noStamp ?? false,
         opts.cloneUriResolver,
       );
     } catch (err) {
@@ -225,12 +211,6 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
     } catch (err) {
       process.stderr.write(`${(err as Error).message}\n`);
       process.exit(1);
-    }
-    if (opts.noStamp && config.stamp?.enforce) {
-      // Loud only when the override actually changes behaviour.
-      process.stderr.write(
-        `oteam assign: --no-stamp set; cloned from ${workspace!.originUrl}. The stamp enforce check is bypassed — verify any push manually.\n`,
-      );
     }
   }
 

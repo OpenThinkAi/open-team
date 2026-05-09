@@ -13,7 +13,7 @@ You are working a `product-vault` ticket. The user invoked `oteam assign <path>`
 3. **No commits, no PRs, no Linear.** Vault tickets do not necessarily map to a code repo. Only act on code if the ticket's `repo:` field is set AND the work demands it.
 4. **STOP at every role-handoff boundary.** When your role is done, write a STOP marker (visual banner per Output discipline below) and let the human decide whether to continue.
 5. **3-attempt cap on any failing operation.** If a step fails (e.g., file mv fails, frontmatter parse fails, build/test fails), you get 3 tries before STOPPing.
-6. **Never read or write inside `$HOME/Development/<repo>`.** That tree may have uncommitted in-flight work; entangling with it is a sterile-field violation. For repo-bound tickets, the `oteam` runner has already prepared an isolated agent worktree at `/tmp/open-team-issues/<ticket-id-lowercased>/repo` and spawned you cd'd into it — that's your only valid working directory. The runner clones from the stamp server when `stamp.enforce: true` is set in `~/.open-team/config.json`, otherwise from GitHub directly; either way, the worktree is isolated from your primary, so AC-shaped requirements like "primary's `git remote -v` is byte-equal before/after a spawn" are satisfied by construction. If your `$PWD` is not the prepared workspace (e.g. you invoked the slash command by hand outside of `oteam assign`), set up the workspace yourself before reading any repo file — see Phase 3 Step 0.
+6. **Never read or write inside `$HOME/Development/<repo>`.** That tree may have uncommitted in-flight work; entangling with it is a sterile-field violation. For repo-bound tickets, the `oteam` runner has already prepared an isolated agent worktree at `/tmp/open-team-issues/<ticket-id-lowercased>/repo` and spawned you cd'd into it — that's your only valid working directory. The runner clones from the URI recorded for the repo in `~/.open-team/config.json` and sets your cwd to it; the worktree is isolated from your primary, so AC-shaped requirements like "primary's `git remote -v` is byte-equal before/after a spawn" are satisfied by construction. If your `$PWD` is not the prepared workspace (e.g. you invoked the slash command by hand outside of `oteam assign`), set up the workspace yourself before reading any repo file — see Phase 3 Step 0.
 
 ## Phase 0 — Read the ticket
 
@@ -65,9 +65,9 @@ If your appended system context flags the **AGT-107 haiku-downshift heuristic** 
 
 ## Phase 3 — Engineering agent (state: refined → spike phase)
 
-**Step 0 — Workspace is already prepared.** When `oteam assign` spawned you against a repo-bound ticket, it already cloned `/tmp/open-team-issues/<ticket-id-lowercased>/repo` (from the stamp server when `stamp.enforce: true` is set in `~/.open-team/config.json`; from GitHub otherwise, or when `--no-stamp` was passed) and set your cwd to it. Confirm with `pwd` and `git remote -v`; for stamp-governed repos you should see exactly one remote, `origin`, pointing at `ssh://git@<stamp-host>:<port>/srv/git/<basename>.git`.
+**Step 0 — Workspace is already prepared.** When `oteam assign` spawned you against a repo-bound ticket, it already cloned `/tmp/open-team-issues/<ticket-id-lowercased>/repo` from the URI recorded for the repo in `~/.open-team/config.json` and set your cwd to it. Confirm with `pwd` and `git remote -v`; you should see exactly one remote, `origin`, pointing at the URI recorded for this repo.
 
-Cost trade: a fresh stamp clone adds a few seconds vs. the older `git worktree add` fast path. That's an intentional trade for AC-grade isolation — the agent worktree shares no `.git/objects` and no remotes with your primary, and removing or renaming any remote inside the worktree cannot leak back to your daily flow.
+Cost trade: a fresh clone per assign adds a few seconds vs. the older `git worktree add` fast path. That's an intentional trade for AC-grade isolation — the agent worktree shares no `.git/objects` and no remotes with your primary, and removing or renaming any remote inside the worktree cannot leak back to your daily flow.
 
 If you invoked `/assign-ticket` by hand (no `oteam assign` wrapper) and the workspace doesn't exist yet, set it up the same way the runner would:
 
@@ -175,8 +175,8 @@ Read `CLAUDE.md`, `AGENTS.md`, `README.md` at the repo root if present.
 
 **2. Verify the worktree shape and compute the merge mode.** Run `git remote -v` and check whether `.stamp/` exists in the worktree. Three shapes are valid:
 
-- **Stamp-governed (default).** Exactly one remote, `origin`, pointing at `ssh://git@<stamp-host>:<port>/srv/git/<basename>.git`. The runner clones with that shape on purpose; no rename / re-add is required, and adding a `github` remote here would defeat the AGT-050 invariant. `MODE` will resolve to `stamp` and routing goes through the stamp-protected branch (5a) at the end of Step 5.
-- **Local-stamp.** `origin` points at `git@github.com:<owner>/<repo>.git` AND the worktree contains a `.stamp/` directory. The repo carries stamp config but no stamp server is in use (typically a `--no-stamp` run against a stamp-aware repo). `MODE` will resolve to `local-stamp` and routing goes through 5c — `stamp review` + `stamp merge` produce a signed merge commit locally, which is then pushed to GitHub as the PR head for human review. `stamp push` is intentionally not invoked (no stamp server); `stamp verify <merge-sha>` still works against the PR head from any clone with the trusted public keys.
+- **Stamp-governed.** Exactly one remote, `origin`, pointing at a non-GitHub URI (the stamp server). `MODE` will resolve to `stamp` and routing goes through the stamp-protected branch (5a) at the end of Step 5.
+- **Local-stamp.** `origin` points at `git@github.com:<owner>/<repo>.git` AND the worktree contains a `.stamp/` directory. The repo carries stamp config but `origin` is GitHub, not a stamp server. `MODE` will resolve to `local-stamp` and routing goes through 5c — `stamp review` + `stamp merge` produce a signed merge commit locally, which is then pushed to GitHub as the PR head for human review. `stamp push` is intentionally not invoked (no stamp server); `stamp verify <merge-sha>` still works against the PR head from any clone with the trusted public keys.
 - **Plain GitHub.** `origin` points at `git@github.com:<owner>/<repo>.git` and there is no `.stamp/` directory. `MODE` will resolve to `plain` and routing goes through 5b — `git push origin <feature>` + `gh pr create`.
 
 Compute `MODE` once, here, from the worktree's actual state — every subsequent step branches on this single variable:
@@ -241,13 +241,9 @@ When tests pass:
 ```sh
 git add -A
 COMMIT_BODY="Refs <ticket-id>"
-# GitHub-bound paths (plain, local-stamp): append a `Fixes <gh-issue-url>`
-# trailer so the eventual PR merge auto-closes the GH issue. The
-# stamp-governed path skips this trailer — those worktrees have no github
-# remote, the merge gets pushed to the stamp server, and GH never sees a
-# commit that would trigger auto-close. QA Phase 5 closes the GH issue
-# explicitly via `gh issue close`, so behaviour is preserved either way.
-if [ "<source.type>" = "github" ] && [ "$MODE" != "stamp" ]; then
+# When the source is a GitHub issue, append a `Fixes <gh-issue-url>` trailer
+# so the PR merge (or stamp push that mirrors to GitHub) auto-closes the issue.
+if [ "<source.type>" = "github" ]; then
     COMMIT_BODY="$COMMIT_BODY"$'\n'"Fixes <linked-github URL>"
 fi
 git commit -m "<one-line summary>

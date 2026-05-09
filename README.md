@@ -65,7 +65,6 @@ oteam pull <source> <ref>             # ingest external item → tickets/triage/
 oteam pull --project <name> ...       # tag the new ticket with a project
 oteam assign <ticket-or-id>           # drive role pipeline (full path or AGT-NNN)
 oteam assign --inline <path>          # … or run inline in current terminal
-oteam assign --no-stamp <id>          # one-shot override of stamp.enforce (clones from GitHub)
 oteam list [--state <state>]          # list active tickets
 oteam list --project <name>           # filter by project frontmatter
 oteam archive <ticket-id>             # move done ticket to archive/YYYY-MM/
@@ -141,7 +140,7 @@ Where the clone comes from is governed by oteam config (`~/.open-team/config.jso
 
 | `stamp` config                                 | Mode      | Clone source                                           | Behaviour                                                                                       |
 |------------------------------------------------|-----------|--------------------------------------------------------|-------------------------------------------------------------------------------------------------|
-| absent / `null`                                | no-stamp  | `git@github.com:<repo>.git`                            | Default. No stamp config files are read. `oteam` works against any git repo.                    |
+| absent / `null`                                | plain     | `git@github.com:<repo>.git`                            | Default. No stamp config files are read. `oteam` works against any git repo.                    |
 | `{ host, enforce: false }`                     | soft      | `git@github.com:<repo>.git`                            | Stamp host is recorded for tooling that asks for it; `oteam assign` does not gate.              |
 | `{ host, enforce: true }`                      | enforce   | `<host>/srv/git/<basename>.git` (the stamp server)     | The clone IS the gate: clone failure exits non-zero before any spawn. AGT-050 behaviour.        |
 
@@ -156,10 +155,6 @@ oteam config stamp set --enforce on   # turn the per-repo gate on (host required
 oteam config stamp set --enforce off  # … or back off
 oteam config stamp clear              # remove the stamp block entirely
 ```
-
-`oteam assign --no-stamp` is a per-run override: it forces the github clone path even when `stamp.enforce: true` is set. The persistent setting is `oteam config stamp set --enforce off`; `--no-stamp` is convenient when you want to spawn a one-off agent without touching config.
-
-> **Migration note.** Earlier `oteam` builds read `~/.stamp/server.yml` directly. This version does not — to keep the AGT-050 stamp gate in place after upgrade, run `oteam init` and paste the host (or `oteam config stamp set --host <url> --enforce on`).
 
 Stale workspaces from prior assigns are GC'd at spawn time: any `/tmp/open-team-issues/agt-N/` directory whose ticket id has no matching ticket in the active vault is `rm -rf`'d before the new clone. The current run's workspace is also `rm -rf`'d before its clone, so re-assigns are hermetic.
 
