@@ -186,7 +186,7 @@ For the live ticket list, run:
 oteam project show ${id} --tickets
 \`\`\`
 
-Tickets are not stored inside this folder — they live in \`<vault>/tickets/<state>/\` and reference this project via frontmatter \`project: ${id}\`.
+Tickets are not stored inside this folder — they live in \`<workspace>/tickets/<state>/\` and reference this project via frontmatter \`project: ${id}\`.
 
 ### Notable shipped milestones (drift expected)
 
