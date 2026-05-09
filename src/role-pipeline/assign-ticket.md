@@ -89,7 +89,7 @@ if [ -z "$CLONE_URI" ]; then
     # this slash command skips the prompt and uses the public default.
     CLONE_URI="git@github.com:${REPO_SLUG}.git"
 fi
-git clone "$CLONE_URI" repo
+git clone -- "$CLONE_URI" repo
 cd repo
 ```
 
