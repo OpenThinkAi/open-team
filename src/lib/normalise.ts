@@ -2,7 +2,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { NormalisedTicket, SourcePayload } from "../ingestors/types.ts";
 import { NORMALISER_MODEL } from "./models.ts";
 
-const SYSTEM_PROMPT = `You normalise unstructured work-item payloads (GitHub issues, Linear tickets, etc.) into well-formed product-vault tickets.
+const SYSTEM_PROMPT = `You normalise unstructured work-item payloads (GitHub issues, Linear tickets, etc.) into well-formed workspace tickets.
 
 Output contract — return EXACTLY this JSON, nothing else:
 
@@ -42,7 +42,7 @@ For a PR, the Problem Statement should describe the proposed change and its rati
 `
     : "";
 
-  const userMessage = `Normalise this ${kindLabel} item into a vault ticket.
+  const userMessage = `Normalise this ${kindLabel} item into a workspace ticket.
 
 <source>
 Title: ${payload.title}

@@ -26,10 +26,10 @@ const BLOCK_END = "<!-- oteam:end -->";
 const AGENTS_BODY = `## oteam — workspace-driven role pipeline for Claude agents
 
 If the user asks you to **search, find, list, filter, count, or file
-tickets**, or mentions a "workspace", an "Obsidian vault", an \`AGT-NNN\` id,
-a project, "ingesting GitHub issues or PRs", or driving tickets through a
-"role pipeline" — \`oteam\` is the right tool. The workspace is a directory
-of markdown files (typically \`~/openteam/tickets/<state>/AGT-NNN-*.md\`),
+tickets**, or mentions a "workspace", an \`AGT-NNN\` id, a project,
+"ingesting GitHub issues or PRs", or driving tickets through a "role
+pipeline" — \`oteam\` is the right tool. The workspace is a directory of
+markdown files (typically \`~/openteam/tickets/<state>/AGT-NNN-*.md\`),
 but **do not search it with \`find\` or \`grep\` directly.** The CLI knows the
 ticket schema and has structured + free-text filters; filesystem search
 does not, and you will fight false positives from incidental keyword
@@ -47,14 +47,14 @@ Other common verbs: \`oteam ticket new "<title>" [--project X]\` to file a
 ticket, \`oteam pull github owner/repo#NN\` to ingest a GitHub issue or PR,
 \`oteam assign <AGT-NNN>\` to drive a ticket through the role pipeline. Run
 \`oteam --help\` or \`oteam <command> --help\` for full details. If you don't
-know whether a workspace is configured, \`oteam config vault list\` tells you.
+know whether a workspace is configured, \`oteam config workspace list\` tells you.
 `;
 
 const CLAUDE_BODY = `## oteam
 
 If the user asks to search, find, list, or file tickets, or mentions a
-"workspace", "Obsidian vault", an \`AGT-NNN\` id, or a role pipeline, use the
-\`oteam\` CLI — **do not** \`find\`/\`grep\` the workspace directly. Start with
+"workspace", an \`AGT-NNN\` id, or a role pipeline, use the \`oteam\` CLI —
+**do not** \`find\`/\`grep\` the workspace directly. Start with
 \`oteam list --grep "<term>"\` or \`oteam list --match "<term>"\`. See
 \`AGENTS.md\` next to this file for the short summary and \`oteam --help\` for
 the full surface.
@@ -345,7 +345,7 @@ function workspaceLine(ws: RunInitResult["workspace"]): string {
   const trail = ws.promotedToDefault
     ? "set as default"
     : ws.currentDefault && ws.currentDefault !== ws.registeredAs
-      ? `current default is "${ws.currentDefault}" — pass \`oteam config vault default --set ${ws.registeredAs}\` to switch`
+      ? `current default is "${ws.currentDefault}" — pass \`oteam config workspace default --set ${ws.registeredAs}\` to switch`
       : "registered";
   return `✅ Created workspace at ${ws.path} (registered as "${ws.registeredAs}"; ${trail})`;
 }

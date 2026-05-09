@@ -33,73 +33,89 @@ export function buildConfigCommand(): Command {
     "Manage oteam config (~/.open-team/config.json)",
   );
 
-  const vault = new Command("vault").description(
-    "Manage registered vault paths and the default vault",
+  // Registers the four vault/workspace subcommands on `parent` so the same
+  // actions are reachable under both `config workspace` (documented) and the
+  // hidden `config vault` alias (muscle memory / back-compat).
+  function attachWorkspaceSubcommands(parent: Command): Command {
+    parent
+      .command("add <path>")
+      .description("Register a workspace path under a name")
+      .option("--name <name>", "Override the auto-derived name")
+      .action((rawPath: string, opts: { name?: string }) => {
+        const result = addVault(rawPath, { name: opts.name });
+        const promoted = result.promotedToDefault
+          ? "\n   (set as default — first workspace registered)"
+          : "";
+        process.stdout.write(
+          `✅ Registered "${result.name}" → ${result.path}${promoted}\n`,
+        );
+      });
+
+    parent
+      .command("list")
+      .description("List registered workspaces")
+      .action(() => {
+        const { vaults, default: def } = listVaults();
+        if (vaults.length === 0) {
+          process.stdout.write(
+            `(no workspaces registered)\n   config: ${configPath()}\n`,
+          );
+          return;
+        }
+        const width = Math.max(...vaults.map((v) => v.name.length));
+        const lines = vaults.map((v) => {
+          const tag = v.name === def ? "  (default)" : "";
+          return `${v.name.padEnd(width)}  ${v.path}${tag}`;
+        });
+        process.stdout.write(lines.join("\n") + "\n");
+      });
+
+    parent
+      .command("remove <name-or-path>")
+      .description("Remove a workspace registration")
+      .action((nameOrPath: string) => {
+        const result = removeVault(nameOrPath);
+        const note = result.clearedDefault
+          ? '\n   default cleared — pass --workspace until you set a new one with "oteam config workspace default --set <name>"'
+          : "";
+        process.stdout.write(`✅ Removed "${result.name}"${note}\n`);
+      });
+
+    parent
+      .command("default")
+      .description("Print or set the default workspace")
+      .option("--set <name-or-path>", "Set the default to this name or path")
+      .action((opts: { set?: string }) => {
+        if (opts.set) {
+          const name = setDefault(opts.set);
+          process.stdout.write(`✅ Default is now "${name}"\n`);
+          return;
+        }
+        const { default: def } = listVaults();
+        if (!def) {
+          process.stdout.write(
+            "(no default — pass --workspace on every command, or set one with --set)\n",
+          );
+          return;
+        }
+        process.stdout.write(`${def}\n`);
+      });
+
+    return parent;
+  }
+
+  const workspace = attachWorkspaceSubcommands(
+    new Command("workspace").description(
+      "Manage registered workspace paths and the default workspace",
+    ),
   );
 
-  vault
-    .command("add <path>")
-    .description("Register a vault path under a name")
-    .option("--name <name>", "Override the auto-derived name")
-    .action((rawPath: string, opts: { name?: string }) => {
-      const result = addVault(rawPath, { name: opts.name });
-      const promoted = result.promotedToDefault
-        ? "\n   (set as default — first vault registered)"
-        : "";
-      process.stdout.write(
-        `✅ Registered "${result.name}" → ${result.path}${promoted}\n`,
-      );
-    });
-
-  vault
-    .command("list")
-    .description("List registered vaults")
-    .action(() => {
-      const { vaults, default: def } = listVaults();
-      if (vaults.length === 0) {
-        process.stdout.write(
-          `(no vaults registered)\n   config: ${configPath()}\n`,
-        );
-        return;
-      }
-      const width = Math.max(...vaults.map((v) => v.name.length));
-      const lines = vaults.map((v) => {
-        const tag = v.name === def ? "  (default)" : "";
-        return `${v.name.padEnd(width)}  ${v.path}${tag}`;
-      });
-      process.stdout.write(lines.join("\n") + "\n");
-    });
-
-  vault
-    .command("remove <name-or-path>")
-    .description("Remove a vault registration")
-    .action((nameOrPath: string) => {
-      const result = removeVault(nameOrPath);
-      const note = result.clearedDefault
-        ? '\n   default cleared — pass --vault until you set a new one with "oteam config vault default --set <name>"'
-        : "";
-      process.stdout.write(`✅ Removed "${result.name}"${note}\n`);
-    });
-
-  vault
-    .command("default")
-    .description("Print or set the default vault")
-    .option("--set <name-or-path>", "Set the default to this name or path")
-    .action((opts: { set?: string }) => {
-      if (opts.set) {
-        const name = setDefault(opts.set);
-        process.stdout.write(`✅ Default is now "${name}"\n`);
-        return;
-      }
-      const { default: def } = listVaults();
-      if (!def) {
-        process.stdout.write(
-          "(no default — pass --vault on every command, or set one with --set)\n",
-        );
-        return;
-      }
-      process.stdout.write(`${def}\n`);
-    });
+  // Hidden alias: `oteam config vault ...` still works for muscle memory.
+  // Commander dispatches both names to the same handlers; only `workspace`
+  // appears in `--help` output.
+  const vaultAlias = attachWorkspaceSubcommands(
+    new Command("vault").description("Alias for workspace (back-compat)"),
+  );
 
   const stamp = new Command("stamp").description(
     "Manage stamp-server integration (host + enforce flag)",
@@ -369,7 +385,8 @@ export function buildConfigCommand(): Command {
       process.stdout.write(`${description}\n`);
     });
 
-  config.addCommand(vault);
+  config.addCommand(workspace);
+  config.addCommand(vaultAlias, { hidden: true });
   config.addCommand(stamp);
   config.addCommand(repo);
   config.addCommand(models);

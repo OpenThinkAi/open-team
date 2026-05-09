@@ -242,7 +242,7 @@ describe("resolveVault precedence", () => {
           flagValue: "ghost",
           config: { vaults: {}, default: null, stamp: null, models: {}, productDownshift: true, telemetry: { enabled: true }, botIdentity: "", repos: {}, push: "on" as const },
         }),
-      /not a registered name and not a path/,
+      /not a registered workspace name or path/,
     );
   });
 });

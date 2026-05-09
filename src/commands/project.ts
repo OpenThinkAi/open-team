@@ -1,4 +1,4 @@
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
@@ -19,33 +19,36 @@ import type { VaultTicket } from "../lib/types.ts";
 
 export function buildProjectCommand(): Command {
   const project = new Command("project").description(
-    "Manage vault projects (folders under <vault>/projects/<id>/)",
+    "Manage workspace projects (folders under <workspace>/projects/<id>/)",
   );
 
   project
     .command("init <id>")
-    .description("Scaffold <vault>/projects/<id>/README.md and open in $EDITOR")
-    .option("--vault <name-or-path>", "Use a specific registered vault")
+    .description("Scaffold <workspace>/projects/<id>/README.md and open in $EDITOR")
+    .option("-w, --workspace <name-or-path>", "Use a specific registered workspace")
+    .addOption(new Option("--vault <name-or-path>").hideHelp())
     .option("--no-edit", "Skip opening the README in $EDITOR after scaffolding")
-    .action((id: string, opts: { vault?: string; edit: boolean }) => {
-      runInit(id, opts);
+    .action((id: string, opts: { workspace?: string; vault?: string; edit: boolean }) => {
+      runInit(id, { vault: opts.workspace ?? opts.vault, edit: opts.edit });
     });
 
   project
     .command("list")
-    .description("List projects in the vault with derived ticket counts")
-    .option("--vault <name-or-path>", "Use a specific registered vault")
-    .action((opts: { vault?: string }) => {
-      runList(opts);
+    .description("List projects in the workspace with derived ticket counts")
+    .option("-w, --workspace <name-or-path>", "Use a specific registered workspace")
+    .addOption(new Option("--vault <name-or-path>").hideHelp())
+    .action((opts: { workspace?: string; vault?: string }) => {
+      runList({ vault: opts.workspace ?? opts.vault });
     });
 
   project
     .command("show <id>")
     .description("Print a project's frontmatter, body, siblings, and ticket counts")
-    .option("--vault <name-or-path>", "Use a specific registered vault")
+    .option("-w, --workspace <name-or-path>", "Use a specific registered workspace")
+    .addOption(new Option("--vault <name-or-path>").hideHelp())
     .option("--tickets", "Also list every ticket tagged with this project")
-    .action((id: string, opts: { vault?: string; tickets?: boolean }) => {
-      runShow(id, opts);
+    .action((id: string, opts: { workspace?: string; vault?: string; tickets?: boolean }) => {
+      runShow(id, { vault: opts.workspace ?? opts.vault, tickets: opts.tickets });
     });
 
   return project;
@@ -87,7 +90,7 @@ function runList(opts: { vault?: string }): void {
   const projects = listProjects(vaultPath);
   if (projects.length === 0) {
     process.stdout.write(
-      `(no projects)\n   <vault>/projects/<id>/README.md is the convention; create one with: oteam project init <id>\n`,
+      `(no projects)\n   <workspace>/projects/<id>/README.md is the convention; create one with: oteam project init <id>\n`,
     );
     return;
   }

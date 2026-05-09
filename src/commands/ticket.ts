@@ -1,4 +1,4 @@
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { renderManualTicket } from "../lib/render.ts";
@@ -16,6 +16,9 @@ export interface TicketNewOptions {
   team?: string;
   priority?: string;
   labels?: string[];
+  /** Documented form; takes precedence over `vault`. */
+  workspace?: string;
+  /** Back-compat alias for `workspace`. */
   vault?: string;
 }
 
@@ -30,7 +33,7 @@ export function runTicketNew(opts: TicketNewOptions): TicketNewResult {
     throw new Error("oteam ticket new: <title> must not be empty");
   }
 
-  const vault = resolveVaultPath({ flagValue: opts.vault });
+  const vault = resolveVaultPath({ flagValue: opts.workspace ?? opts.vault });
   const triageDir = join(vault, "tickets", "triage");
   mkdirSync(triageDir, { recursive: true });
 
@@ -70,13 +73,13 @@ function collectLabel(value: string, prev: string[] = []): string[] {
 
 export function buildTicketCommand(): Command {
   const ticket = new Command("ticket").description(
-    "Create vault tickets directly (without an external source)",
+    "Create workspace tickets directly (without an external source)",
   );
 
   ticket
     .command("new <title>")
     .description(
-      "File a new ticket in <vault>/tickets/triage/ — works with or without a project",
+      "File a new ticket in <workspace>/tickets/triage/ — works with or without a project",
     )
     .option(
       "--project <id>",
@@ -90,7 +93,8 @@ export function buildTicketCommand(): Command {
       collectLabel,
       [] as string[],
     )
-    .option("--vault <name-or-path>", "Use a specific registered vault")
+    .option("-w, --workspace <name-or-path>", "Use a specific registered workspace")
+    .addOption(new Option("--vault <name-or-path>").hideHelp())
     .action(
       (
         title: string,
@@ -99,6 +103,7 @@ export function buildTicketCommand(): Command {
           team?: string;
           priority?: string;
           label: string[];
+          workspace?: string;
           vault?: string;
         },
       ) => {
@@ -108,7 +113,7 @@ export function buildTicketCommand(): Command {
           team: opts.team,
           priority: opts.priority,
           labels: opts.label,
-          vault: opts.vault,
+          vault: opts.workspace ?? opts.vault,
         });
         process.stdout.write(`✅ Filed ${result.ticketID}\n   ${result.path}\n`);
       },

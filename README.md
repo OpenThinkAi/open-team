@@ -1,6 +1,6 @@
 # open-team
 
-Source-agnostic vault-driven role pipeline for spawning Claude agents against tickets. Lifts the "Assign to agent" + role-pipeline flow out of agentic-desktop's Swift code into a standalone npm CLI.
+Source-agnostic workspace-driven role pipeline for spawning Claude agents against tickets. Lifts the "Assign to agent" + role-pipeline flow out of agentic-desktop's Swift code into a standalone npm CLI.
 
 ## Install
 
@@ -42,7 +42,7 @@ Flags:
 
 ## Workspace setup
 
-`open-team` reads from a workspace directory ("vault" is Obsidian's word; oteam doesn't depend on Obsidian). Layout:
+`open-team` reads from a workspace directory (no Obsidian required). Layout:
 
 ```
 openteam/
@@ -56,7 +56,7 @@ openteam/
 
 A ticket's `state:` frontmatter must always match its containing folder under `tickets/`.
 
-For the simplest single-workspace setup, run `oteam init` (creates and registers `~/openteam/`). To use an existing tree, register it via `oteam config vault add <path>` or set `PRODUCT_VAULT_PATH`. For multiple workspaces (personal + work, etc.) see [Config & multiple vaults](#config--multiple-vaults).
+For the simplest single-workspace setup, run `oteam init` (creates and registers `~/openteam/`). To use an existing tree, register it via `oteam config workspace add <path>` or set `PRODUCT_VAULT_PATH`. For multiple workspaces (personal + work, etc.) see [Config & multiple workspaces](#config--multiple-workspaces).
 
 ## Subcommands
 
@@ -68,8 +68,8 @@ oteam assign --inline <path>          # … or run inline in current terminal
 oteam list [--state <state>]          # list active tickets
 oteam list --project <name>           # filter by project frontmatter
 oteam archive <ticket-id>             # move done ticket to archive/YYYY-MM/
-oteam config vault add <path>         # register a vault under a name
-oteam config vault list               # show registered vaults + default
+oteam config workspace add <path>     # register a workspace under a name
+oteam config workspace list           # show registered workspaces + default
 oteam config stamp set --host <url>   # configure stamp host post-init
 oteam config stamp set --enforce on   # require repos be stamp-registered
 oteam config stamp clear              # remove the stamp block
@@ -83,7 +83,7 @@ oteam telemetry summary [--days N] [--phase X] [--model Y]
 oteam telemetry tail [-n 20]          # last N telemetry lines (raw JSONL)
 ```
 
-Most commands accept `--vault <name-or-path>` to operate on a specific vault.
+Most commands accept `--workspace <name-or-path>` (or the back-compat alias `--vault`) to operate on a specific workspace.
 
 ### Tagging tickets by project
 
@@ -220,33 +220,35 @@ Knobs:
 - `oteam config telemetry set off` opts out — no JSONL writes occur. Re-enable with `oteam config telemetry set on`. Default is on.
 - Telemetry is best-effort: a write failure (read-only dir, missing session file, malformed log) writes one line to stderr and does not fail the role-pipeline phase. Token fields the agent SDK doesn't expose are omitted from the line rather than recorded as zero.
 
-## Config & multiple vaults
+## Config & multiple workspaces
 
-`open-team` supports any number of named vaults via `~/.open-team/config.json`. Register them with:
+`open-team` supports any number of named workspaces via `~/.open-team/config.json`. The on-disk key is `vaults` for back-compat with earlier builds; conceptually these are workspaces. Register them with:
 
 ```sh
-oteam config vault add ~/Documents/product-vault           # auto-name "product-vault"; first add becomes default
-oteam config vault add ~/Documents/work-vault --name work
-oteam config vault list
-oteam config vault default --set work
-oteam config vault remove work                              # clears default if it pointed here
+oteam config workspace add ~/Documents/my-workspace           # auto-name "my-workspace"; first add becomes default
+oteam config workspace add ~/Documents/work-workspace --name work
+oteam config workspace list
+oteam config workspace default --set work
+oteam config workspace remove work                            # clears default if it pointed here
 ```
 
-Paths are resolved to absolute at `add` time, so the registration survives `cd`. Removing the default vault clears `default` and forces an explicit `--vault` on every subsequent command until you set a new one — there is no silent promotion.
+The `oteam config vault ...` form also works as a silent back-compat alias (`oteam config vault add` and `oteam config workspace add` register the same thing).
+
+Paths are resolved to absolute at `add` time, so the registration survives `cd`. Removing the default workspace clears `default` and forces an explicit `--workspace` on every subsequent command until you set a new one — there is no silent promotion.
 
 ### Resolution precedence (most-specific wins)
 
-| # | Source                                            | Notes                                                |
-|---|---------------------------------------------------|------------------------------------------------------|
-| 1 | `--vault <name-or-path>` flag                     | Per-command override                                 |
-| 2 | `PRODUCT_VAULT_PATH` env var                      | One-off shell override; also propagated to spawns    |
-| 3 | `default` in `~/.open-team/config.json`           | Set via `oteam config vault default --set <name>`    |
-| 4 | `~/Documents/product-vault`                       | Implicit fallback if no config exists                |
+| # | Source                                                    | Notes                                                         |
+|---|-----------------------------------------------------------|---------------------------------------------------------------|
+| 1 | `--workspace <name-or-path>` flag (or `--vault` alias)    | Per-command override                                          |
+| 2 | `PRODUCT_VAULT_PATH` env var                              | One-off shell override; also propagated to spawns             |
+| 3 | `default` in `~/.open-team/config.json`                   | Set via `oteam config workspace default --set <name>`         |
+| 4 | `~/Documents/product-vault`                               | Implicit fallback if no config exists                         |
 
 `oteam assign` adds two niceties on top:
 
-- **AGT-NNN shorthand**: `oteam assign AGT-001` walks `<vault>/tickets/<state>/` for a file whose basename starts with `AGT-001-`.
-- **Vault auto-detection from path**: passing a full path that lives inside a registered vault root makes that vault the active one for the run, even if it's not the default. The spawned `_role-run` then inherits `PRODUCT_VAULT_PATH=<that-vault>` so any follow-up `oteam pull/list/...` from the agent lands in the same vault.
+- **AGT-NNN shorthand**: `oteam assign AGT-001` walks `<workspace>/tickets/<state>/` for a file whose basename starts with `AGT-001-`.
+- **Workspace auto-detection from path**: passing a full path that lives inside a registered workspace root makes that workspace the active one for the run, even if it's not the default. The spawned `_role-run` then inherits `PRODUCT_VAULT_PATH=<that-workspace>` so any follow-up `oteam pull/list/...` from the agent lands in the same workspace.
 
 ## Claim-on-assign (preventing double-pickup)
 
@@ -281,7 +283,7 @@ agentic-desktop now keeps only the PR-side modules (`GitHubPRs`, `AIReview*`, `C
 Migration steps:
 
 1. `npm install -g @openthink/team` (or `npm link` from a local clone).
-2. Either set `PRODUCT_VAULT_PATH` if your vault isn't at `~/Documents/product-vault`, or register it via `oteam config vault add <path>` (see [Config & multiple vaults](#config--multiple-vaults)).
+2. Either set `PRODUCT_VAULT_PATH` if your workspace isn't at `~/Documents/product-vault`, or register it via `oteam config workspace add <path>` (see [Config & multiple workspaces](#config--multiple-workspaces)).
 3. Optionally set `OTEAM_MONITORED_ORGS=Org1,Org2` to route those repos' tickets to the "work" kitty socket (preserves the personal/work split agentic-desktop had).
 4. Delete `~/Library/Application Support/AgenticDesktop/vault-assignments.json` (panel-indicator state, no longer used).
 5. Use `oteam pull github <ref>` instead of clicking "Assign to agent" on the Issues panel.
