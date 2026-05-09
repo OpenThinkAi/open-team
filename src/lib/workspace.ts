@@ -97,7 +97,7 @@ export function prepareAgentWorkspace(
 }
 
 const defaultCloneRunner: CloneRunner = (url, dest) => {
-  const r = spawnSync("git", ["clone", "--quiet", url, dest], {
+  const r = spawnSync("git", ["clone", "--quiet", "--", url, dest], {
     encoding: "utf8",
     env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
   });
