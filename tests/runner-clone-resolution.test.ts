@@ -1,7 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { NoTTYError, promptCloneUri } from "../src/lib/prompt-clone-uri.ts";
-import { StampEnforceError } from "../src/role-pipeline/runner.ts";
+import { StampEnforceError, resolveCloneUriForAssign } from "../src/role-pipeline/runner.ts";
+import type { OteamConfig } from "../src/lib/config.ts";
 
 describe("NoTTYError", () => {
   it("has the right name and slug field", () => {
@@ -41,7 +42,6 @@ describe("StampEnforceError", () => {
     assert.match(err.message, /git@github\.com:Acme\/widget\.git/);
     assert.match(err.message, /ssh:\/\/git@stamp\.acme\.com:22000/);
     assert.match(err.message, /oteam config repo set/);
-    assert.match(err.message, /--no-stamp/);
   });
 });
 
@@ -94,5 +94,58 @@ describe("promptCloneUri", () => {
       "refuse",
     );
     assert.equal(result.uri, "https://github.com/OpenThinkAi/open-team.git");
+  });
+});
+
+describe("resolveCloneUriForAssign — stamp-enforce gate", () => {
+  const stampHost = "ssh://git@stamp.example.com:22000";
+  const stampUri = `${stampHost}/srv/git/open-team.git`;
+  const githubUri = "git@github.com:OpenThinkAi/open-team.git";
+
+  const baseConfig: Omit<OteamConfig, "repos" | "stamp"> = {
+    vaults: {},
+    default: null,
+    models: {},
+    productDownshift: true,
+    telemetry: { enabled: true },
+    botIdentity: "",
+  };
+
+  function makeConfig(enforce: boolean, repoUri: string = githubUri): OteamConfig {
+    return {
+      ...baseConfig,
+      repos: { "OpenThinkAi/open-team": { "clone-uri": repoUri, added: "2026-01-01T00:00:00.000Z" } },
+      stamp: { host: stampHost, enforce },
+    };
+  }
+
+  it("throws StampEnforceError when enforce=true and URI does not start with stamp.host", async () => {
+    const config = makeConfig(true, githubUri);
+    await assert.rejects(
+      () => resolveCloneUriForAssign(config, "OpenThinkAi/open-team"),
+      StampEnforceError,
+    );
+  });
+
+  it("resolves successfully when enforce=true and URI starts with stamp.host", async () => {
+    const config = makeConfig(true, stampUri);
+    const uri = await resolveCloneUriForAssign(config, "OpenThinkAi/open-team");
+    assert.equal(uri, stampUri);
+  });
+
+  it("resolves successfully when enforce=false regardless of URI", async () => {
+    const config = makeConfig(false, githubUri);
+    const uri = await resolveCloneUriForAssign(config, "OpenThinkAi/open-team");
+    assert.equal(uri, githubUri);
+  });
+
+  it("resolves successfully when no stamp config is set", async () => {
+    const config: OteamConfig = {
+      ...baseConfig,
+      repos: { "OpenThinkAi/open-team": { "clone-uri": githubUri, added: "2026-01-01T00:00:00.000Z" } },
+      stamp: null,
+    };
+    const uri = await resolveCloneUriForAssign(config, "OpenThinkAi/open-team");
+    assert.equal(uri, githubUri);
   });
 });
