@@ -178,6 +178,16 @@ repos: []
 
 <!-- Canonical design doc for this project. Tickets reference this project via \`project: ${id}\` in their frontmatter. The role-pipeline auto-loads this README into the spawned agent's context, so anything authoritative about the project's architecture, scope, naming, or defaults belongs here. -->
 
+<!-- Conventions when editing this README:
+  - Design-doc only. Anything that would drift over time — ticket lists, status
+    tables, audit logs, per-row records — belongs to a CLI command, not inline
+    text. Before adding a new section that resembles a list of records, ask
+    whether \`oteam\` (or another CLI) already owns the content, or should, and
+    link to the command instead of hand-maintaining the list here.
+  - Architecture, scope, naming, defaults, and prior decisions are exactly the
+    things that DO belong here — those are stable design-doc content the
+    pipeline-spawned agent needs in its context. -->
+
 ## Tickets
 
 For the live ticket list, run:

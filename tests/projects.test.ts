@@ -172,4 +172,12 @@ describe("projectFrontmatterTemplate", () => {
     const text = projectFrontmatterTemplate("hello-world");
     assert.match(text, /^### Notable shipped milestones \(drift expected\)$/m);
   });
+
+  it("guides future editors to delegate drift-prone lists to the CLI before adding inline sections", () => {
+    const text = projectFrontmatterTemplate("hello-world");
+    assert.match(text, /Conventions when editing this README/);
+    assert.match(text, /Design-doc only/);
+    assert.match(text, /belongs to a CLI command/);
+    assert.match(text, /link to the command instead of hand-maintaining/);
+  });
 });
