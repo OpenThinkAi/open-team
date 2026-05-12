@@ -198,6 +198,70 @@ describe("telemetry: recordPhase produces a valid runs.jsonl line (AC #8a)", () 
   });
 });
 
+describe("telemetry: stderr diagnostics when session parse path fails (AC #3)", () => {
+  it("emits a stderr line when the session file is absent", () => {
+    const cwd = join(fakeHome, "workspace-diag-absent");
+    mkdirSync(cwd, { recursive: true });
+    const stderrLines: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      stderrLines.push(String(chunk));
+      return orig(chunk);
+    }) as unknown as typeof process.stderr.write;
+    try {
+      recordPhase({
+        ticket: "AGT-233",
+        phase: "product",
+        model: "claude-sonnet-4-6",
+        sessionId: "diag-0000-0000-0000-000000000001",
+        startedAt: "2026-05-04T10:00:00.000Z",
+        endedAt: "2026-05-04T10:00:01.000Z",
+        exitCode: 0,
+        cwd,
+      });
+    } finally {
+      process.stderr.write = orig;
+    }
+    const diag = stderrLines.find((l) => l.includes("session file not found"));
+    assert.ok(diag, `expected a "session file not found" diagnostic on stderr; got: ${JSON.stringify(stderrLines)}`);
+  });
+
+  it("emits a stderr line when the session file exists but yields no tokens", () => {
+    const cwd = join(fakeHome, "workspace-diag-empty");
+    mkdirSync(cwd, { recursive: true });
+    const sessionId = "diag-0000-0000-0000-000000000002";
+    // Write a session file whose only content is a non-assistant type, so no
+    // token fields are accumulated.
+    writeSyntheticSession(
+      cwd,
+      sessionId,
+      JSON.stringify({ type: "user", message: { content: "hello" } }),
+    );
+    const stderrLines: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      stderrLines.push(String(chunk));
+      return orig(chunk);
+    }) as unknown as typeof process.stderr.write;
+    try {
+      recordPhase({
+        ticket: "AGT-233",
+        phase: "product",
+        model: "claude-sonnet-4-6",
+        sessionId,
+        startedAt: "2026-05-04T10:00:00.000Z",
+        endedAt: "2026-05-04T10:00:01.000Z",
+        exitCode: 0,
+        cwd,
+      });
+    } finally {
+      process.stderr.write = orig;
+    }
+    const diag = stderrLines.find((l) => l.includes("no token data parsed"));
+    assert.ok(diag, `expected a "no token data parsed" diagnostic on stderr; got: ${JSON.stringify(stderrLines)}`);
+  });
+});
+
 describe("telemetry: write failures are best-effort (AC #4 + AC #8b)", () => {
   it("does not throw when the telemetry dir is read-only", () => {
     const dir = telemetryDir();
