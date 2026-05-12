@@ -67,7 +67,7 @@ oteam assign <ticket-or-id>           # drive role pipeline (full path or AGT-NN
 oteam assign --inline <path>          # … or run inline in current terminal
 oteam list [--state <state>]          # list active tickets
 oteam list --project <name>           # filter by project frontmatter
-oteam archive <ticket-id>             # move done ticket to archive/YYYY-MM/
+oteam archive <ticket-id>             # move done ticket to archive/YYYY-MM/ + reap workspace
 oteam config workspace add <path>     # register a workspace under a name
 oteam config workspace list           # show registered workspaces + default
 oteam config stamp set --host <url>   # configure stamp host post-init
