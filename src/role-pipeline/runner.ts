@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { resolve, basename, dirname, join } from "node:path";
 import {
@@ -337,17 +337,34 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
   // code so we can preserve it both into the record and as the wrapper's
   // exit status.
   const claudeCmd = `'${escapedClaude}' --dangerously-skip-permissions --model ${shellEscape(model)}${sessionFlag}${projectFlag} '${escapedPrompt}'`;
-  const telemetryTail = telemetry
-    ? buildTelemetryTail({
-        oteamPath: findToolOnPath("oteam") ?? "oteam",
-        ticketId: telemetry.ticketId,
-        phase: telemetry.phase,
-        model,
-        sessionId: telemetry.sessionId,
-        startedAt: telemetry.startedAt,
-      })
-    : "";
-  const shellCmd = `${envPrefix}${claudeCmd}${telemetryTail}`;
+
+  // AGT-049: write claude's exit code to a per-ticket sentinel file when it
+  // exits, so external orchestrators driving multi-ticket epics can watch the
+  // file and know the spawned role-pipeline finished. AC 3: any stale sentinel
+  // from a prior run is removed before spawn so a false-positive can't slip
+  // through. AC 2: the sentinel path is included in the first stdout line.
+  const sentinelPath = sentinelPathForTicket(ticket.id);
+  try {
+    unlinkSync(sentinelPath);
+  } catch {
+    // ENOENT is the normal case (no prior run) — also fine if the path is gone
+    // by the time we check. Any other error here would surface again when the
+    // tail tries to write the file, so swallow uniformly.
+  }
+  const tail = buildKittySpawnTail({
+    sentinelPath,
+    telemetry: telemetry
+      ? {
+          oteamPath: findToolOnPath("oteam") ?? "oteam",
+          ticketId: telemetry.ticketId,
+          phase: telemetry.phase,
+          model,
+          sessionId: telemetry.sessionId,
+          startedAt: telemetry.startedAt,
+        }
+      : null,
+  });
+  const shellCmd = `${envPrefix}${claudeCmd}${tail}`;
 
   const result = kittyLaunch({
     socket,
@@ -361,15 +378,28 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
       `kitty @ launch exited ${result.exitCode}: ${result.stderr || "(no stderr)"}`,
     );
   }
-  process.stdout.write(kittySpawnLine(ticket.id, workspace?.path ?? null) + "\n");
+  process.stdout.write(
+    kittySpawnLine(ticket.id, workspace?.path ?? null, sentinelPath) + "\n",
+  );
+}
+
+/**
+ * Deterministic sentinel path for a ticket. External orchestrators rely on
+ * this being lower-cased + dot-exit-suffixed; the runner also prints the path
+ * verbatim in the first stdout line so callers don't have to re-derive it.
+ */
+export function sentinelPathForTicket(ticketId: string): string {
+  return `/tmp/oteam-sentinel-${ticketId.toLowerCase()}.exit`;
 }
 
 export function kittySpawnLine(
   ticketId: string,
   workspacePath: string | null,
+  sentinelPath: string | null = null,
 ): string {
-  const suffix = workspacePath ? ` (worktree at ${workspacePath})` : "";
-  return `oteam assign: spawned kitty window for ${ticketId}${suffix}`;
+  const worktree = workspacePath ? ` (worktree at ${workspacePath})` : "";
+  const sentinel = sentinelPath ? ` (sentinel ${sentinelPath})` : "";
+  return `oteam assign: spawned kitty window for ${ticketId}${worktree}${sentinel}`;
 }
 
 export function inlineStartLine(ticketId: string): string {
@@ -383,28 +413,45 @@ interface TelemetryHandle {
   startedAt: string;
 }
 
-function buildTelemetryTail(input: {
+export interface KittyTailTelemetry {
   oteamPath: string;
   ticketId: string;
   phase: string;
   model: string;
   sessionId: string;
   startedAt: string;
+}
+
+/**
+ * Build the shell tail appended after `claude` in the kitty spawn command.
+ *
+ * The tail captures claude's exit code (`EC=$?`), writes it to the AGT-049
+ * sentinel file, optionally records AGT-108 telemetry, then exits the wrapper
+ * shell with claude's original exit code. The sentinel write is wrapped in
+ * `|| true` so a redirection failure (e.g. /tmp not writable) doesn't mask
+ * `$EC` — the wrapper still exits with claude's status and the missing
+ * sentinel is the external orchestrator's signal that something went wrong.
+ */
+export function buildKittySpawnTail(input: {
+  sentinelPath: string;
+  telemetry: KittyTailTelemetry | null;
 }): string {
-  // Best-effort per AC #4: redirect stdout/stderr of the record step to
-  // /dev/null so a record-side error never leaks into the kitty window.
-  // The record subcommand also stderrs internally; the redirect here is a
-  // belt-and-suspenders guard against an unexpected throw.
-  const oteam = `'${shellEscape(input.oteamPath)}'`;
-  const args = [
-    `--ticket '${shellEscape(input.ticketId)}'`,
-    `--phase '${shellEscape(input.phase)}'`,
-    `--model '${shellEscape(input.model)}'`,
-    `--session '${shellEscape(input.sessionId)}'`,
-    `--started-at '${shellEscape(input.startedAt)}'`,
-    `--exit-code "$EC"`,
-  ].join(" ");
-  return `; EC=$?; ${oteam} telemetry record ${args} >/dev/null 2>&1 || true; exit "$EC"`;
+  const sentinelWrite = `printf '%s\\n' "$EC" > '${shellEscape(input.sentinelPath)}' || true`;
+  const parts = [`EC=$?`, sentinelWrite];
+  if (input.telemetry) {
+    const oteam = `'${shellEscape(input.telemetry.oteamPath)}'`;
+    const args = [
+      `--ticket '${shellEscape(input.telemetry.ticketId)}'`,
+      `--phase '${shellEscape(input.telemetry.phase)}'`,
+      `--model '${shellEscape(input.telemetry.model)}'`,
+      `--session '${shellEscape(input.telemetry.sessionId)}'`,
+      `--started-at '${shellEscape(input.telemetry.startedAt)}'`,
+      `--exit-code "$EC"`,
+    ].join(" ");
+    parts.push(`${oteam} telemetry record ${args} >/dev/null 2>&1 || true`);
+  }
+  parts.push(`exit "$EC"`);
+  return `; ${parts.join("; ")}`;
 }
 
 async function runInline(
