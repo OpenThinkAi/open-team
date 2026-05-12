@@ -1,6 +1,7 @@
-import { mkdirSync, renameSync } from "node:fs";
+import { mkdirSync, renameSync, rmSync } from "node:fs";
 import { basename, join } from "node:path";
-import { readAllTickets, resolveVaultPath } from "../lib/vault.ts";
+import { isAgtId, readAllTickets, resolveVaultPath } from "../lib/vault.ts";
+import { WORKSPACE_ROOT } from "../lib/workspace.ts";
 
 export interface ArchiveOptions {
   ticketID: string;
@@ -25,5 +26,10 @@ export function runArchive(opts: ArchiveOptions): string {
   mkdirSync(archiveDir, { recursive: true });
   const target = join(archiveDir, basename(match.filePath));
   renameSync(match.filePath, target);
+
+  if (isAgtId(match.id)) {
+    rmSync(join(WORKSPACE_ROOT, match.id.toLowerCase()), { recursive: true, force: true });
+  }
+
   return target;
 }

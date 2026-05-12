@@ -543,11 +543,15 @@ function listProcessGroup(pgid: number): number[] {
     .filter((n) => Number.isFinite(n) && n > 0);
 }
 
+// Terminal states have no remaining work to do in the workspace; their dirs
+// are treated as orphans so gcOrphanWorkspaces sweeps them on the next assign.
+const TERMINAL_STATES = new Set(["done", "blocked"]);
+
 function collectActiveTicketIds(vaultPath: string): Set<string> {
   const ids = new Set<string>();
   try {
     for (const t of readAllTickets(vaultPath)) {
-      ids.add(t.id.toLowerCase());
+      if (!TERMINAL_STATES.has(t.state)) ids.add(t.id.toLowerCase());
     }
   } catch {
     // Best-effort — a vault read failure should not block the spawn. The

@@ -212,6 +212,24 @@ describe("gcOrphanWorkspaces", () => {
     rmSync(rootDir, { recursive: true, force: true });
     assert.deepEqual(gcOrphanWorkspaces(rootDir, new Set()), []);
   });
+
+  it("sweeps workspaces for terminal-state tickets (done/blocked) excluded from active set", () => {
+    // Simulates the collectActiveTicketIds fix: done/blocked tickets are
+    // omitted from the active set so their workspaces are swept on the next
+    // oteam assign rather than accumulating indefinitely.
+    mkdirSync(join(rootDir, "agt-010", "repo"), { recursive: true });
+    mkdirSync(join(rootDir, "agt-011", "repo"), { recursive: true });
+    mkdirSync(join(rootDir, "agt-012", "repo"), { recursive: true });
+
+    // agt-010 = blocked, agt-011 = done → excluded from active set
+    // agt-012 = in-progress → still active
+    const removed = gcOrphanWorkspaces(rootDir, new Set(["agt-012"]));
+    const removedBasenames = removed.map((p) => p.split("/").pop()).sort();
+    assert.deepEqual(removedBasenames, ["agt-010", "agt-011"]);
+    assert.equal(existsSync(join(rootDir, "agt-010")), false, "blocked ticket workspace must be swept");
+    assert.equal(existsSync(join(rootDir, "agt-011")), false, "done ticket workspace must be swept");
+    assert.equal(existsSync(join(rootDir, "agt-012")), true, "in-progress ticket workspace must be preserved");
+  });
 });
 
 describe("prepareAgentWorkspace input validation", () => {
