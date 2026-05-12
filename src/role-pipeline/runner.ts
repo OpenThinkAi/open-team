@@ -1,7 +1,7 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { resolve, basename, dirname, join } from "node:path";
 import {
   findVaultRootForPath,
@@ -48,6 +48,10 @@ import {
   readAllTickets,
   resolveVault,
 } from "../lib/vault.ts";
+import {
+  findSessionFile,
+  lastAssistantText,
+} from "../lib/claude-session.ts";
 import {
   prepareAgentWorkspace,
   type PreparedWorkspace,
@@ -267,7 +271,7 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
   const wantsKitty = !opts.workInline && isMacOS();
   if (!wantsKitty) {
     process.stdout.write(inlineStartLine(ticket.id) + "\n");
-    runInline(
+    await runInline(
       claudePath,
       ticketPath,
       resolvedVault.path,
@@ -403,7 +407,7 @@ function buildTelemetryTail(input: {
   return `; EC=$?; ${oteam} telemetry record ${args} >/dev/null 2>&1 || true; exit "$EC"`;
 }
 
-function runInline(
+async function runInline(
   claudePath: string,
   ticketPath: string,
   vaultPath: string,
@@ -411,20 +415,18 @@ function runInline(
   workspace: PreparedWorkspace | null,
   model: string,
   telemetry: TelemetryHandle | null,
-): void {
-  // Spawn claude in the current terminal with the slash command pre-typed,
-  // inheriting stdio so the user can interact with the session normally.
-  // PRODUCT_VAULT_PATH is propagated explicitly so the agent's follow-up
-  // `oteam pull/list/...` calls land in the same vault.
+): Promise<void> {
+  // Always mint a sessionId so the JSONL file is locatable for AC 3 summary
+  // recovery, regardless of whether telemetry is enabled.
+  const sessionId = telemetry?.sessionId ?? randomUUID();
+
   const args: string[] = [
     "--dangerously-skip-permissions",
     "--model", model,
+    "--session-id", sessionId,
   ];
-  if (telemetry) {
-    args.push("--session-id", telemetry.sessionId);
-  }
   if (systemPrompt) {
-    // Inline path uses spawnSync's argv directly — no shell escaping needed,
+    // Inline path uses spawn's argv directly — no shell escaping needed,
     // and we can pass the prompt content rather than reading it from the tmp
     // file. Tmp file is still written for parity with the kitty path (and so
     // failure modes match across the two spawn shapes).
@@ -433,30 +435,112 @@ function runInline(
   args.push(`/assign-ticket ${ticketPath}`);
 
   const cwd = workspace?.path ?? process.cwd();
-  const r = spawnSync(
-    claudePath,
-    args,
-    {
-      stdio: "inherit",
-      cwd: workspace?.path,
-      env: { ...process.env, PRODUCT_VAULT_PATH: vaultPath },
-    },
-  );
+
+  // AGT-236: use async spawn with detached:true so claude becomes the leader
+  // of a new process group. After claude itself exits (exit event), we can
+  // enumerate and kill any descendant subprocesses that are still alive via
+  // pgrep -g <pgid>, giving them a 30 s grace period first.
+  const child = spawn(claudePath, args, {
+    stdio: "inherit",
+    cwd: workspace?.path,
+    env: { ...process.env, PRODUCT_VAULT_PATH: vaultPath },
+    detached: true,
+  });
+
+  if (child.pid == null) {
+    throw new Error(`oteam assign: failed to spawn claude — pid is null`);
+  }
+  const pgid = child.pid;
+
+  const exitCode = await new Promise<number>((resolve) => {
+    child.on("exit", (code) => resolve(code ?? 0));
+  });
+
+  // Grace period: wait up to 30 s for descendant processes in claude's group
+  // to exit on their own, then forcibly kill any survivors (AC 1 + AC 2).
+  const killed = await killGroupAfterGrace(pgid, 30_000);
+  if (killed.length > 0) {
+    process.stderr.write(
+      `oteam assign: killed ${killed.length} subprocess(es) that outlived the agent turn: PIDs ${killed.join(", ")}\n`,
+    );
+    // AC 3: read the last assistant turn from the session JSONL and print it
+    // so the operator can see the completion summary even if stdout was wedged.
+    const claudeConfigDir =
+      (process.env["CLAUDE_CONFIG_DIR"] ?? "").length > 0
+        ? process.env["CLAUDE_CONFIG_DIR"]!
+        : join(homedir(), ".claude");
+    const sessionPath = findSessionFile(claudeConfigDir, cwd, sessionId);
+    const summary = lastAssistantText(sessionPath);
+    if (summary) {
+      process.stdout.write(
+        "\n--- Last agent output (recovered from session JSONL) ---\n" +
+          summary +
+          "\n--- end recovered output ---\n",
+      );
+    }
+  }
+
   if (telemetry) {
     // AGT-108: best-effort per AC #4 — recordPhase already wraps its own
-    // body in try/catch and writes any failure to stderr. The runner does
-    // not check the return value because there's nothing to fail over to.
+    // body in try/catch and writes any failure to stderr.
     recordPhase({
       ticket: telemetry.ticketId,
       phase: telemetry.phase,
       model,
       sessionId: telemetry.sessionId,
       startedAt: telemetry.startedAt,
-      exitCode: r.status ?? -1,
+      exitCode,
       cwd,
     });
   }
-  if (r.status != null && r.status !== 0) process.exit(r.status);
+  if (exitCode !== 0) process.exit(exitCode);
+}
+
+/**
+ * After a spawned process group leader exits, poll for surviving members of
+ * its process group and kill them with SIGKILL once the grace period expires.
+ * Returns the PIDs that were killed (empty when the group cleared on its own).
+ *
+ * Exported for unit testing — the injectable `opts.listFn` and `opts.killFn`
+ * replace the OS calls so tests don't need real processes.
+ */
+export async function killGroupAfterGrace(
+  pgid: number,
+  graceMs: number,
+  opts: {
+    listFn?: (pgid: number) => number[];
+    killFn?: (pid: number) => void;
+    pollMs?: number;
+  } = {},
+): Promise<number[]> {
+  const listFn = opts.listFn ?? listProcessGroup;
+  const killFn = opts.killFn ?? ((pid) => { try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ } });
+  const pollMs = opts.pollMs ?? 500;
+  const deadline = Date.now() + graceMs;
+
+  while (Date.now() < deadline) {
+    const pids = listFn(pgid);
+    if (pids.length === 0) return [];
+    await new Promise<void>((r) => setTimeout(r, pollMs));
+  }
+
+  const survivors = listFn(pgid);
+  for (const pid of survivors) killFn(pid);
+  return survivors;
+}
+
+function listProcessGroup(pgid: number): number[] {
+  // macOS: pgrep -g <pgid>; Linux fallback: ps -o pid= -g <pgid>
+  let r = spawnSync("pgrep", ["-g", String(pgid)], { encoding: "utf8" });
+  if (r.status !== 0 || !r.stdout?.trim()) {
+    r = spawnSync("ps", ["-o", "pid=", "-g", String(pgid)], { encoding: "utf8" });
+  }
+  if (r.status !== 0 || !r.stdout) return [];
+  return (r.stdout as string)
+    .trim()
+    .split("\n")
+    .map((s) => parseInt(s.trim(), 10))
+    .filter((n) => Number.isFinite(n) && n > 0);
 }
 
 function collectActiveTicketIds(vaultPath: string): Set<string> {

@@ -48,6 +48,34 @@ export function parseSessionFile(path: string): ParsedSession {
   return parseSessionJsonl(raw);
 }
 
+/**
+ * Return the text from the last assistant turn in a JSONL session file, or
+ * null if the file is absent, empty, or contains no assistant messages. Used
+ * by the inline runner to surface the completion summary when stdout was
+ * wedged by a child subprocess that outlived the agent turn (AC 3 of AGT-236).
+ */
+export function lastAssistantText(path: string): string | null {
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+  let last = "";
+  for (const line of raw.split("\n")) {
+    if (line.length === 0) continue;
+    let entry: unknown;
+    try { entry = JSON.parse(line); } catch { continue; }
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry as Record<string, unknown>;
+    if (e.type !== "assistant") continue;
+    const m = (e.message ?? {}) as Record<string, unknown>;
+    const text = extractAssistantText(m.content);
+    if (text.length > 0) last = text;
+  }
+  return last.length > 0 ? last : null;
+}
+
 export function parseSessionJsonl(raw: string): ParsedSession {
   const tokens: TokenUsage = {};
   let lastAssistantText = "";
