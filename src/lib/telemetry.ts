@@ -85,6 +85,15 @@ export function recordPhase(input: RecordPhaseInput): void {
       const parsed = parseSessionFile(sessionFile);
       tokens = parsed.tokens;
       markerOutcome = parsed.outcome;
+      if (Object.keys(tokens).length === 0) {
+        process.stderr.write(
+          `oteam: telemetry: session file found but no token data parsed — ${sessionFile}\n`,
+        );
+      }
+    } else {
+      process.stderr.write(
+        `oteam: telemetry: session file not found — ${sessionFile}\n`,
+      );
     }
 
     const outcome: Outcome =

@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { resolve, basename, dirname, join } from "node:path";
 import {
@@ -434,7 +434,13 @@ async function runInline(
   }
   args.push(`/assign-ticket ${ticketPath}`);
 
-  const cwd = workspace?.path ?? process.cwd();
+  // Resolve symlinks so the encoded cwd matches the path Claude Code uses when
+  // writing session JSONL. On macOS /tmp is a symlink to /private/tmp; without
+  // this resolution, findSessionFile encodes "-tmp-..." while Claude Code
+  // stores the file under "-private-tmp-...", causing existsSync to miss it and
+  // recordPhase to silently fall back to tokens:{} / outcome:"unknown".
+  const rawCwd = workspace?.path ?? process.cwd();
+  const cwd = (() => { try { return realpathSync(rawCwd); } catch { return rawCwd; } })();
 
   // AGT-236: use async spawn with detached:true so claude becomes the leader
   // of a new process group. After claude itself exits (exit event), we can
