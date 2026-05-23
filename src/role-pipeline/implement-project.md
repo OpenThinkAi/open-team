@@ -1,160 +1,167 @@
 ---
-description: Drive every ticket in a vault project through the role-pipeline to done with minimal human intervention. Argument is a project id (e.g. `think-cli-v2`). Surface only architectural surprises, alarming findings, or user-action gates.
+description: Drive every ticket in a workspace project through the role-pipeline to done from a single interactive session, fanning work out to Task subagents. Argument is a project id (e.g. `think-cli-v2`). Two human gates: plan approval (after spike) and merge approval (before push), batched per wave.
 argument-hint: <project-id>
 ---
 
-You are running an **autonomous-orchestration loop** against a single project in the vault. The user invoked `/implement-project <project-id>` because they want every active ticket in that project driven through the role-pipeline (Product → Engineering spike → Engineering implementation → QA → archive) with as little human gating as possible. Your job is to be the orchestrator that decides what to fire next, watches results, makes taste-level calls, and surfaces only what truly needs the human.
+You are the **in-session orchestrator** for one workspace project. You run inside the user's interactive Claude Code session, so every token you and your subagents spend draws on the user's **subscription**, not the metered Agent SDK credit. You drive each active ticket through the role pipeline (Product → Engineering spike → Engineering implementation → QA → archive) by **dispatching Task subagents** — never by spawning `claude`, calling `claude -p`, or touching the Agent SDK.
 
-**Argument**: `$ARGUMENTS` — a single project id matching a folder under `<vault>/projects/<id>/` (e.g. `think-cli-v2`). The user's vault path comes from the active oteam config; you do not need to resolve it manually.
+**Argument**: `$ARGUMENTS` — a single project id matching a folder under `<workspace>/projects/<id>/` (e.g. `think-cli-v2`). The workspace path comes from the active oteam config; you do not resolve it manually.
 
 ## Hard rules — read first
 
-1. **Stop conditions are tight. Everything else is yours.** Surface to the human only on:
-   - **Architectural decisions surfaced by unknown findings during build** — implementation reveals something that meaningfully changes the design (e.g. "the API doesn't actually support what we assumed").
-   - **Something so off or confusing it's alarming.** Trust the gut. Divergent histories, unexplained CI failures, missing remotes, weird auth states — surface them.
-   - **User-action gates** — tickets where the work is for the operator (e.g. migrate a Railway deployment, configure GH branch protection, sign a credential). You can't proxy these. Surface and wait.
-   - **Spike-time questions that require the user's roadmap or values** — not "default 100 vs 1000," but "single-tenant vs multi-tenant" if the design doc didn't already decide.
+1. **Billing invariant: all role work runs as Task subagents you dispatch.** Never run `oteam assign --inline` expecting it to *run* the role — as of the zero-SDK conversion `oteam assign` only *prepares* the workspace and prints an `oteam:assignment` block. You parse that block and dispatch a subagent into the prepared worktree. Never spawn `claude`, `claude -p`, or the Agent SDK from any tool call. Subagents inherit your interactive (subscription) bucket; a spawned process or `-p` would not.
 
-   Do NOT stop for: file naming, test fixture shape, comment voice, choosing between equally-good library options, small refactors, ordering of independent sub-steps. Exercise judgment.
+2. **Two human gates, batched per wave. Everything else is your call.**
+   - **Plan gate** — after the spike(s) in a wave produce plans, present them together and get approval before any implementation.
+   - **Merge gate** — after implementation + QA + stamp review go GREEN, present the ready-to-merge set for the wave and get approval before any `stamp merge`/push.
+   - Make taste-level calls yourself: file naming, fixture shape, comment voice, equally-good library choices, ordering of independent substeps. Do not gate on those.
 
-2. **Push to main is self-authorized when stamp's three reviewers approve.** Do not ping the user before pushing. The stamp gate is the approval mechanism. After every push to `origin/main`, immediately notify the user with a single-line update: `🔔 AGT-XXX pushed to <repo> as <sha>` plus a one-sentence summary of what the work did.
+3. **Surface immediately (exceptions, not gates):** architectural surprises found mid-build, alarming states (divergent histories, unexplained CI failures, missing remotes, weird auth), user-action tickets (work only the operator can do), and spike questions that need the user's roadmap/values (e.g. single- vs multi-tenant) the design doc didn't answer. Surface and wait.
 
-3. **Never push to GitHub directly from an agent worktree.** Work goes through stamp; stamp mirrors to GitHub. If a worktree somehow ends up with a github remote and an agent pushes there, the stamp server's view of main and GitHub's view diverge, and reconciliation is painful (cherry-pick + re-stamp + force-push). Insist on stamp-only push paths.
+4. **Parallelism is by wave.** Tickets in the same wave run as **concurrent subagents — dispatch them in a single message with multiple Task calls.** Sequence waves on dependencies. A ticket's worktree must be cut from *post-merge* main, so only run `oteam assign` for a ticket **at the start of its wave**, never all upfront.
 
-4. **Background long runs, inline short ones.**
-   - **Inline:** Product passes, QA passes, anything < ~3 minutes.
-   - **Background** (`run_in_background: true` on the Bash tool): Engineering spikes, implementations, anything that involves real LLM thinking + code edits. The user's session stays free; you get a notification when the task completes.
+5. **Never push to GitHub directly from a worktree.** Work goes through stamp; stamp mirrors to GitHub. If a worktree ends up with a github remote and a subagent pushes there, the stamp server's main and GitHub's main diverge and reconciliation is painful. Insist on stamp-only push paths.
 
-5. **Sequential by default; parallel only when truly independent AND no shared push surface.** Two parallel implementations that both push to main create the parallelization race that bit us during the AGT-025/026 reconciliation. Only run in parallel when (a) the tickets touch disjoint files and (b) they won't both land on main in the same minute. When in doubt, sequential.
+6. **3-attempt cap on any failing operation.** Three failures → STOP and surface.
 
-6. **3-attempt cap on any failing operation.** Three failures → STOP and surface the error.
+7. **`stamp review` is the one remaining metered call** (it fans out reviewers via the Agent SDK inside stamp-cli). It is intentional, low-frequency, and gated — do not try to route around it. Everything else you and your subagents do is on subscription.
+
+## The core subroutine — "drive one role for a ticket"
+
+Every role advance uses this three-step subroutine. Reuse it from the phases below.
+
+1. **Prepare the workspace** (Bash, foreground — it's fast and deterministic):
+
+   ```sh
+   oteam assign AGT-XXX
+   ```
+
+   Parse the fenced ```` ```oteam:assignment ```` JSON block from stdout. You need `workspacePath`, `slashCommand`, `model`, `phase`, `systemPromptFile`, `envFiles`, and `telemetry`. If `oteam assign` exits non-zero or stderr shows a claim/clone error (already-claimed, issue-closed, clone-uri refused, stamp-enforce mismatch), that's an **exception** — surface it; do not dispatch.
+
+2. **Dispatch a Task subagent** into the prepared worktree. Use `subagent_type: general-purpose` and set the subagent's `model` to the block's `model`. Prompt template:
+
+   > Working directory: `<workspacePath>`. `cd` there first; never read or write outside it.
+   > Read the role-pipeline skill body and follow it for this ticket. **Subagents do not expand slash commands**, so read the body file directly — `$CLAUDE_CONFIG_DIR/commands/assign-ticket.md` if that env var is set, otherwise `~/.claude/commands/assign-ticket.md`. The skill's `$ARGUMENTS` (the ticket file) is the path inside `<slashCommand>` — i.e. `<ticketPath>`.
+   > {If `systemPromptFile` is set:} First read `<systemPromptFile>` for extra context (project README / heuristic hints).
+   > {If `envFiles` is non-empty:} Before any build/install/test, source the env files (guard each — some may not exist yet): `set -a; for f in <envFiles>; do [ -r "$f" ] && . "$f"; done; set +a`.
+   > Advance the ticket **exactly one role**, then STOP at the role-handoff boundary per the skill's own rules. **Do not run `stamp merge` or push anything** — if your role reaches the merge step, run `stamp review` only, then STOP and report the review result as "ready to merge" (GREEN) or the blocking reasons (RED).
+   > Return verbatim: (a) the STOP/PAUSED/BLOCKED marker line, (b) the comment you appended to the ticket, and (c) role-specific payload — for a **spike**, the plan and its S/M/L + H/M/L self-rating; for **implementation**, a one-paragraph diff summary and the stamp review status.
+
+3. **Record telemetry** (best-effort, foreground; never gate on it):
+
+   ```sh
+   oteam telemetry record --ticket AGT-XXX --phase <phase> --model <model> --session <telemetry.sessionId> --started-at <telemetry.startedAt> --exit-code 0 >/dev/null 2>&1 || true
+   ```
+
+   Skip when the block's `telemetry` is `null`. (Per-subagent token accounting is being reworked; record what the block gives you.)
+
+Then branch on the subagent's returned marker.
 
 ## Phase 0 — Pre-flight
 
-Resolve the project. Run:
+Resolve the project:
 
 ```sh
 oteam project show <project-id> --tickets
 ```
 
-If that errors, STOP — print `🛑 BLOCKED — project <id> not found in vault` and surface the candidates from `oteam project list`.
+If that errors, STOP — print `🛑 BLOCKED — project <id> not found in workspace` and list candidates from `oteam project list`.
 
-Read the project README and every sibling design doc:
+Read the project README and sibling design docs:
 
 ```sh
-PROJECT_DIR="$(oteam project show <project-id> | grep '^  readme:' | awk '{print $2}' | xargs dirname)"
+# (sed, not awk $2 — skill arg-substitution eats `$2` in a skill body)
+PROJECT_DIR="$(oteam project show <project-id> | grep '^  readme:' | sed 's#.*: *##' | xargs dirname)"
 cat "$PROJECT_DIR/README.md"
 ls "$PROJECT_DIR/"
-# read each sibling .md as needed for context
 ```
 
-Build the dependency graph from ticket comments (each ticket usually names "Sequencing: blocked by AGT-XXX" or "depends on AGT-YYY"). Identify:
+Build the dependency graph from ticket comments ("Sequencing: blocked by AGT-XXX" / "depends on AGT-YYY"), then **group it into waves**: a wave is the set of active tickets whose dependencies are all already merged. Tickets within a wave run in parallel; waves run in sequence. Mark user-action tickets as gates and exclude deferred/parking-lot tickets unless told otherwise.
 
-- Active tickets (state ≠ done): the work to do.
-- Done tickets: assume their content is in main.
-- User-action tickets (the kind where engineering can't proceed without the operator doing something offline): mark these as gates.
-- Deferred / parking-lot tickets (their own comment usually says so): exclude from the chain unless the user says otherwise.
+## Phase 1 — Confirm the waves
 
-## Phase 1 — Confirm the chain with the user
+Print a short plan (no walls):
 
-Print a short plan to the user (no walls of text):
+- The waves, in order, with the tickets in each.
+- Which ticket depends on which (why the waves split where they do).
+- User-action gates and excluded tickets, with one-line reasons.
 
-- The active ticket list, in proposed execution order.
-- Sequencing notes (which depend on which; which can run in parallel; which are user-gates).
-- Anything explicitly excluded (deferred tickets) and why.
+Ask one question: "Run these waves with plan + merge gates? Or override anything?" Wait for go-ahead. Adjust and re-confirm if they push back. Do not start firing without an explicit go.
 
-Ask one question: "Run this chain with the standard autonomous-orchestration rules? Or override anything?"
+## Phase 2 — Drive wave by wave
 
-If the user says go (or equivalent), proceed. If they push back on the plan, adjust and re-confirm. Do not start firing without explicit go-ahead on the chain shape.
+For each wave, in order:
 
-## Phase 2 — Drive each ticket
+### 2.0 — Brief on prior retros (once per ticket, gated on `repo:`)
 
-For each non-user-gate ticket, in dependency order:
-
-### 2.0 — Brief on prior retros for this ticket's repo
-
-**Gated on `repo:` being non-empty.** Read the ticket's `repo:` frontmatter field. If it is empty or absent, skip this step silently — vault-internal tickets have no cortex to brief from.
-
-Derive the cortex name from the `repo:` value using the **same rule pinned in AGT-173/174**: take the path component after the slash, lowercased. Examples: `OpenThinkAi/open-team` → `open-team`, `Anglepoint-Engineering/ui-host` → `ui-host`. The cortex name is sourced from validated frontmatter, so it is safe as a literal in shell.
-
-Run `think brief` and capture stdout. **Do not gate on exit code or empty output** — every failure mode (missing binary, cortex not found, non-zero exit, empty cortex) is non-fatal; the orchestrator proceeds without the brief:
+For each ticket in the wave with a non-empty `repo:`, derive the cortex name as the path component after the slash, lowercased (`OpenThinkAi/open-team` → `open-team`), and capture:
 
 ```sh
 think brief --cortex <derived-cortex-name> 2>&1 || true
 ```
 
-Treat the captured output as a clearly-labelled background section in your working context: `## Prior context for ticket AGT-XXX (<repo>)`. It is background, not actionable directives — lessons to weigh when deciding how to drive this ticket, not a re-litigation of its spike. If `think` is missing, exits non-zero, or the cortex has no promoted retros yet, note `no prior retros yet for <repo>` and proceed normally.
+Treat the output as background context (`## Prior context for AGT-XXX (<repo>)`), not directives. Non-fatal on every failure mode; note `no prior retros yet for <repo>` and proceed. Fetch at most once per ticket per run; the subagents run their own `think brief` via the skill, so don't forward yours into the dispatch.
 
-**Fetch at most once per ticket per orchestrator run.** This step runs here at the 2.0 entry point; do not re-fetch in 2b, 2c, or 2d for the same ticket. The spawned `oteam assign` agent runs its own `think brief` via AGT-174 — do not forward this orchestrator's brief output into the spawn; that would double-fetch.
+### 2a — Product, then spike (parallel across the wave)
 
-### 2a. Product pass (inline, short)
+For each ticket in the wave, run the **core subroutine** for the Product role, then the spike role. Drive these in parallel across the wave (concurrent subagents). Interpret returns:
 
-```sh
-oteam assign --inline AGT-XXX
-```
+- Product `✅ DONE — Refined`: advance to the spike for that ticket.
+- Product `⏸️ PAUSED — needs answers`: surface to the user (Product can't proceed without input); drop that ticket from the wave until answered.
+- Spike auto-proceeded (S/H rated): hold the ticket at "plan ready, no review needed" and carry it into the plan gate as auto-approvable.
+- Spike `⏸️ PAUSED — Spike ready for plan review`: carry the plan into the plan gate.
+- Any `STOP:`/`🛑 BLOCKED`: surface with the error.
 
-If Product returns `✅ DONE — Refined; ready for Engineering spike`, proceed. If `⏸️ PAUSED — Ticket needs answers before Product can refine`, surface to the user — Product can't proceed without their input.
+### 2b — PLAN GATE (batched per wave)
 
-### 2b. Engineering spike (background)
+Once every ticket in the wave has a plan, present them **together**:
 
-```sh
-oteam assign --inline AGT-XXX  # with run_in_background: true on the Bash tool
-```
+- For each: ticket, one-line approach, scope/confidence rating, and any open questions.
+- Resolve taste-level questions yourself and say so. Surface only roadmap/architectural questions for the user.
+- Auto-rated S/H plans with no open questions: list them as "auto-approved" but still let the user veto in the same turn.
 
-When the background task notification arrives, read the task's output file. Three possible outcomes:
+Ask once: "Approve these plans? (or call out changes)". On approval, for each ticket append a `### YYYY-MM-DD — Plan approved` comment, advance `state: in-progress`, move the file to `tickets/in-progress/`.
 
-- **Spike auto-proceeded to implementation (S/H rated, no plan review needed):** continue to 2d.
-- **Spike paused for plan review (M+ scope or has gaps):** read the spike. Decide on each open question:
-  - If it's taste-level (file names, fixture shape, default values, sequencing of independent substeps): make the call yourself. Append a `### YYYY-MM-DD — Plan approved` comment to the ticket noting your decisions and the rationale. Advance the ticket frontmatter to `state: in-progress`, move the file to `tickets/in-progress/`, then re-fire `oteam assign --inline AGT-XXX` (background).
-  - If it's an architectural decision the design doc doesn't answer: surface to the user. Quote the spike's question. Wait.
-- **Spike failed (`STOP:` error of some kind):** surface to the user with the error.
+### 2c — Implementation + QA + review (parallel across the wave)
 
-### 2c. Implementation (background)
+For each approved ticket, run the **core subroutine** for the implementation role (the subagent implements, tests, and runs `stamp review` — but **stops before `stamp merge`**), then the QA role against the worktree. Parallel across the wave. Interpret returns:
 
-The agent does the work, runs stamp review, stamp merge, push. When the background task notification arrives:
+- Implementation `ready to merge` (stamp review GREEN) + QA `✅ DONE — QA approved`: carry into the merge gate.
+- Stamp review RED after the skill's 5-round rule: surface the blocking reasons.
+- QA `changes_requested`: re-dispatch implementation with the QA feedback noted in a comment (respect the 3-attempt cap).
+- Any architectural surprise in the diff: surface (exception).
 
-- Read the task output.
-- If it pushed to `origin/main`: notify the user immediately with a one-line `🔔 AGT-XXX pushed to <repo> as <sha>` plus a one-sentence summary.
-- If it stamp-merged but the mirror push to GitHub was rejected (the AGT-026 case): SURFACE — divergence is alarming, never auto-reconcile.
-- If stamp gate stayed closed (review never converged): surface the last review's `changes_requested` reasoning to the user.
-- If implementation completed but didn't push (no main push needed, e.g. test-only changes that the agent decided to leave on a branch): note in the user-facing summary.
+### 2d — MERGE GATE (batched per wave)
 
-### 2d. QA pass (inline, short)
+Once every ticket in the wave is GREEN + QA-approved, present the ready-to-merge set **together**: ticket, one-paragraph summary, target branch, review status. Ask once: "Approve merges for this wave?"
 
-```sh
-oteam assign --inline AGT-XXX
-```
+On approval, for each ticket dispatch a final **merge subagent** (core subroutine, but the instruction is: run `stamp merge` + the stamp push path per the skill's Phase 5, then archive). After each lands on `origin/main`, notify immediately: `🔔 AGT-XXX merged to <repo> as <sha>` + one sentence on what it did. If a stamp-merge succeeds but the GitHub mirror push is rejected, **SURFACE — never auto-reconcile** divergence.
 
-QA verifies the AC against the merged code and archives the ticket. If QA returns `✅ DONE — QA approved; archived`, mark the ticket complete in your internal chain and move to the next ticket. If QA bounces back with `changes_requested`, fire the engineering implementation again (background) with the QA feedback noted in a comment.
+### 2e — User-action tickets
 
-### 2e. User-action tickets
-
-When the chain reaches a user-action ticket:
-
-- Stop driving.
-- Surface the ticket to the user with: title, what they need to do (concrete steps, ideally copy-pasteable commands), and why it's blocking.
-- Wait. Do not proceed past it until the user signs off (either by archiving it or telling you "done, move on").
+When a wave contains a user-action ticket: stop driving it, surface (title, concrete copy-pasteable steps, why it blocks), and wait until the user archives it or says "done, move on." Do not advance dependents until it clears.
 
 ## Phase 3 — Post-completion
 
-When every active ticket in the chain is archived:
+When every active ticket is archived:
 
-- Print a summary: tickets shipped (with SHAs), elapsed time, anything noteworthy that happened during the run.
-- Offer to bump the project's `status:` frontmatter to `shipped` in `<project>/README.md`, if every active ticket is archived and the user hasn't otherwise indicated more work is incoming.
-- Ask if there are any follow-up tickets to file (issues that surfaced during the run that didn't get filed yet).
+- Print a summary: tickets shipped (with SHAs), waves run, anything noteworthy.
+- Offer to bump the project's `status:` to `shipped` in `<project>/README.md` if all active tickets are archived and no more work is signalled.
+- Ask if any follow-up tickets surfaced during the run that should be filed (`oteam ticket new`).
 
-Then stop. Do not chain into the next project automatically; the user picks what to do next.
+Then stop. Don't auto-chain into another project.
 
 ## Output discipline
 
-- One status update per state transition. Don't narrate every Bash call.
-- Always notify on push to `origin/main` (single line, immediate).
-- When surfacing a stop condition: name the ticket, name the issue, propose the resolution paths, ask one question. No walls of text.
-- Use the user's preferred voice from feedback memory: terse, technical, no marketing.
+- One status update per state transition / per gate. Don't narrate every Bash call or subagent dispatch.
+- Notify immediately on each merge to `origin/main` (single line).
+- When surfacing an exception: name the ticket, name the issue, propose resolution paths, ask one question. No walls.
+- Terse, technical, no marketing.
 
-## Things that are explicitly NOT your job
+## Explicitly NOT your job
 
-- Filing new tickets unsolicited (use `oteam ticket new` if a clear bug surfaces during the run, but only file when the issue is concrete and unrelated to the chain you're driving — don't bloat the chain).
-- Reconciling stamp/GitHub divergence — surface immediately, do not auto-merge or auto-force-push.
-- Rewriting design docs mid-run — if the design doc is wrong, surface that and wait.
-- Pushing to feature branches that haven't been stamp-reviewed — stamp is the gate.
+- Spawning `claude` / `claude -p` / the Agent SDK for any role work — subagents only (Hard rule 1).
+- Filing tickets unsolicited (use `oteam ticket new` only for a concrete, unrelated bug found mid-run).
+- Reconciling stamp/GitHub divergence — surface, never auto-merge or force-push.
+- Rewriting design docs mid-run — surface and wait.
+- Pushing feature branches that haven't passed stamp review — stamp is the gate.

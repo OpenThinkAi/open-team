@@ -45,7 +45,10 @@ mentions.
 
 Other common verbs: \`oteam ticket new "<title>" [--project X]\` to file a
 ticket, \`oteam pull github owner/repo#NN\` to ingest a GitHub issue or PR,
-\`oteam assign <AGT-NNN>\` to drive a ticket through the role pipeline. Run
+\`oteam assign <AGT-NNN>\` to **prepare** a ticket's workspace and print an
+\`oteam:assignment\` block (it does not run Claude itself — dispatch a Task
+subagent into the prepared worktree to run \`/assign-ticket\`, or use the
+\`/implement-project\` orchestrator to drive a whole project). Run
 \`oteam --help\` or \`oteam <command> --help\` for full details. If you don't
 know whether a workspace is configured, \`oteam config workspace list\` tells you.
 `;

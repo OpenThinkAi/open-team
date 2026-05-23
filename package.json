@@ -1,8 +1,8 @@
 {
   "name": "@openthink/team",
-  "version": "0.0.13",
+  "version": "1.0.0",
   "type": "module",
-  "description": "Source-agnostic vault-driven role pipeline for spawning Claude agents against tickets",
+  "description": "Source-agnostic vault-driven role pipeline for driving Claude agents against tickets (in-session, zero-SDK)",
   "bin": {
     "oteam": "dist/index.js"
   },
@@ -34,7 +34,6 @@
     "node": ">=22.5.0"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.114",
     "commander": "^13.1.0"
   },
   "devDependencies": {

@@ -1,61 +1,78 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import {
-  inlineStartLine,
-  kittySpawnLine,
-  sentinelPathForTicket,
+  assignmentBlock,
+  assignmentSummary,
+  resolveEnvFiles,
+  type AssignmentContext,
 } from "../src/role-pipeline/runner.ts";
 
-describe("runner: status lines", () => {
-  it("kittySpawnLine names ticket and worktree path when one was prepared", () => {
-    const line = kittySpawnLine("AGT-013", "/tmp/open-team-issues/agt-013/repo");
-    assert.equal(
-      line,
-      "oteam assign: spawned kitty window for AGT-013 (worktree at /tmp/open-team-issues/agt-013/repo)",
-    );
+function ctx(overrides: Partial<AssignmentContext> = {}): AssignmentContext {
+  return {
+    ticketId: "AGT-013",
+    ticketPath: "/ws/tickets/refined/AGT-013-foo.md",
+    state: "refined",
+    phase: "spike",
+    vaultPath: "/ws",
+    workspacePath: "/tmp/open-team-issues/agt-013/repo",
+    originUrl: "ssh://git@stamp.example/srv/git/foo.git",
+    envFiles: [],
+    model: "claude-opus-4-7",
+    slashCommand: "/assign-ticket /ws/tickets/refined/AGT-013-foo.md",
+    systemPromptFile: null,
+    haikuDownshift: false,
+    telemetry: null,
+    ...overrides,
+  };
+}
+
+describe("runner: assignment summary", () => {
+  it("names the ticket, phase, worktree, and model", () => {
+    const out = assignmentSummary(ctx());
+    assert.match(out, /prepared AGT-013 \(spike phase\)/);
+    assert.match(out, /worktree: \/tmp\/open-team-issues\/agt-013\/repo/);
+    assert.match(out, /model:\s+claude-opus-4-7/);
+    assert.match(out, /dispatch a subagent to run/);
   });
 
-  it("kittySpawnLine omits the worktree suffix for vault-only tickets", () => {
-    const line = kittySpawnLine("AGT-013", null);
-    assert.equal(line, "oteam assign: spawned kitty window for AGT-013");
+  it("omits the worktree line for workspace-only tickets", () => {
+    const out = assignmentSummary(ctx({ workspacePath: null }));
+    assert.doesNotMatch(out, /worktree:/);
   });
 
-  it("kittySpawnLine appends the sentinel path when one is passed (AGT-049)", () => {
-    const sentinel = sentinelPathForTicket("AGT-013");
-    const line = kittySpawnLine(
-      "AGT-013",
-      "/tmp/open-team-issues/agt-013/repo",
-      sentinel,
-    );
-    assert.equal(
-      line,
-      "oteam assign: spawned kitty window for AGT-013 (worktree at /tmp/open-team-issues/agt-013/repo) (sentinel /tmp/oteam-sentinel-agt-013.exit)",
-    );
+  it("falls back to state in the header when phase is null", () => {
+    const out = assignmentSummary(ctx({ phase: null, state: "blocked" }));
+    assert.match(out, /prepared AGT-013 \(blocked phase\)/);
+  });
+});
+
+describe("runner: resolveEnvFiles", () => {
+  const home = homedir();
+
+  it("lists primary .env/.env.local + per-repo secrets file, lowercased", () => {
+    assert.deepEqual(resolveEnvFiles("OpenThinkAi/open-team"), [
+      join(home, "Development", "open-team", ".env"),
+      join(home, "Development", "open-team", ".env.local"),
+      join(home, ".open-team", "env-openthinkai-open-team"),
+    ]);
   });
 
-  it("kittySpawnLine sentinel appears even when there's no worktree", () => {
-    const line = kittySpawnLine(
-      "AGT-013",
-      null,
-      sentinelPathForTicket("AGT-013"),
-    );
-    assert.equal(
-      line,
-      "oteam assign: spawned kitty window for AGT-013 (sentinel /tmp/oteam-sentinel-agt-013.exit)",
-    );
+  it("drops path components that fail the charset guard (shell-metachar defence)", () => {
+    assert.deepEqual(resolveEnvFiles("owner/re;po"), []);
   });
+});
 
-  it("sentinelPathForTicket lowercases the id and uses the .exit suffix", () => {
-    assert.equal(
-      sentinelPathForTicket("AGT-049"),
-      "/tmp/oteam-sentinel-agt-049.exit",
-    );
-  });
-
-  it("inlineStartLine names the ticket and signals start", () => {
-    assert.equal(
-      inlineStartLine("AGT-013"),
-      "oteam assign: running inline for AGT-013; agent starting…",
-    );
+describe("runner: assignment block", () => {
+  it("emits a fenced oteam:assignment block that round-trips to the context", () => {
+    const c = ctx();
+    const block = assignmentBlock(c);
+    assert.match(block, /^```oteam:assignment\n/);
+    assert.match(block, /\n```$/);
+    const json = block
+      .replace(/^```oteam:assignment\n/, "")
+      .replace(/\n```$/, "");
+    assert.deepEqual(JSON.parse(json), c);
   });
 });

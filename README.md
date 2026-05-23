@@ -1,6 +1,8 @@
 # open-team
 
-Source-agnostic workspace-driven role pipeline for spawning Claude agents against tickets. Lifts the "Assign to agent" + role-pipeline flow out of agentic-desktop's Swift code into a standalone npm CLI.
+Source-agnostic workspace-driven role pipeline for driving Claude agents against tickets. Lifts the "Assign to agent" + role-pipeline flow out of agentic-desktop's Swift code into a standalone npm CLI.
+
+> **Zero-SDK / on-subscription.** `oteam` invokes no Claude programmatically — it ships **no** `@anthropic-ai/claude-agent-sdk` dependency and never runs `claude -p`. `oteam assign` *prepares* a ticket's workspace and emits an assignment context; the role work runs as **Task subagents inside your interactive Claude Code session**, so it draws on your subscription rather than the metered Agent SDK credit. See [Role-pipeline state machine](#role-pipeline-state-machine).
 
 ## Install
 
@@ -63,8 +65,7 @@ For the simplest single-workspace setup, run `oteam init` (creates and registers
 ```sh
 oteam pull <source> <ref>             # ingest external item → tickets/triage/
 oteam pull --project <name> ...       # tag the new ticket with a project
-oteam assign <ticket-or-id>           # drive role pipeline (full path or AGT-NNN)
-oteam assign --inline <path>          # … or run inline in current terminal
+oteam assign <ticket-or-id>           # prepare workspace + emit assignment context (full path or AGT-NNN)
 oteam list [--state <state>]          # list active tickets
 oteam list --project <name>           # filter by project frontmatter
 oteam archive <ticket-id>             # move done ticket to archive/YYYY-MM/ + reap workspace
@@ -105,7 +106,7 @@ Sources currently implemented: `github` (refs: `owner/repo#NN` or full issue URL
 
 ## Source-ingestor configuration
 
-Each ingestor pulls a payload from its source then runs an LLM normaliser (`src/lib/normalise.ts`) that turns the unstructured body into a 1–2 sentence problem statement plus 2+ end-state-shaped acceptance criteria — shape-equivalent to a hand-filed `/file-ticket`. The normaliser uses `@anthropic-ai/claude-agent-sdk`'s `query()` and inherits whatever auth the SDK resolves (typically Claude Code's stored session).
+Each ingestor pulls a payload from its source then runs a **deterministic** normaliser (`src/lib/normalise.ts`) that maps the source into a triage-shape ticket: the source body becomes the Problem Statement (the title when the body is empty), Acceptance Criteria start empty. No LLM call happens at pull time — the Product/refinement role shapes the rough import into a 1–2 sentence problem statement plus testable AC later, in-session (see [Role-pipeline state machine](#role-pipeline-state-machine)). This is what keeps `oteam` zero-SDK.
 
 Add a new source by writing one new `Ingestor` in `src/ingestors/<name>.ts` and registering it in `src/ingestors/index.ts`. No new UI surface, no new top-level command.
 
@@ -122,19 +123,15 @@ Add a new source by writing one new `Ingestor` in `src/ingestors/<name>.ts` and 
 | `blocked`      | (stops, surfaces comment) |
 | `done`         | (stops)                   |
 
-The pipeline body lives at `src/role-pipeline/assign-ticket.md` and is bundled into `dist/`. On `oteam assign` the runner (`src/role-pipeline/runner.ts`) installs the bundled body into every reachable Claude profile (`~/.claude/commands/`, `~/.claude-personal/commands/`, `$CLAUDE_CONFIG_DIR/commands/`, etc.) and spawns:
+The pipeline body lives at `src/role-pipeline/assign-ticket.md` and is bundled into `dist/`. `oteam assign` (`src/role-pipeline/runner.ts`) installs the bundled body into every reachable Claude profile (`~/.claude/commands/`, `~/.claude-personal/commands/`, `$CLAUDE_CONFIG_DIR/commands/`, etc.) so an in-session agent can resolve `/assign-ticket`, then does the deterministic prep (claim the GH issue, clone the worktree, resolve the per-phase model, compose any system-prompt context) and prints an **assignment context** to stdout — a human summary plus a fenced ```` ```oteam:assignment ```` JSON block (`workspacePath`, `model`, `slashCommand`, `phase`, `envFiles`, …).
 
-```
-claude --dangerously-skip-permissions --model claude-opus-4-7 "/assign-ticket <path>"
-```
+`oteam assign` **does not run Claude.** An interactive Claude Code parent — typically the [`/implement-project`](src/role-pipeline/implement-project.md) orchestrator — parses that block and dispatches a **Task subagent** into the prepared worktree to run `/assign-ticket`. Because the parent is an interactive session, the subagent draws on your subscription, not the metered Agent SDK credit. (The `--inline` flag is accepted but a deprecated no-op — there is no longer anything to spawn.)
 
-…inside a new kitty OS window on macOS, or inline in the calling terminal on `--inline` / non-macOS platforms. The spawned session inherits your full Claude Code environment — global `CLAUDE.md`, MCP servers, hooks, your other slash commands. The role pipeline runs there as the literal `/assign-ticket` slash command.
+Requires the `claude` CLI on PATH for the slash-command install path (https://claude.com/claude-code).
 
-Requires the `claude` CLI on PATH (https://claude.com/claude-code).
+### Clone resolution (stamp integration)
 
-### Spawn-time clone modes (stamp integration)
-
-For repo-bound tickets (`repo:` frontmatter set), `oteam assign` clones an isolated agent worktree before spawning and points the spawned session's cwd at it. The cloned worktree has exactly one remote — `origin` — and shares no `.git/objects` with any clone you keep elsewhere on disk, so the agent can never push back into your daily checkout by accident.
+For repo-bound tickets (`repo:` frontmatter set), `oteam assign` clones an isolated agent worktree during prep and reports its path in the assignment context. The cloned worktree has exactly one remote — `origin` — and shares no `.git/objects` with any clone you keep elsewhere on disk, so the subagent can never push back into your daily checkout by accident.
 
 Where the clone comes from is governed by oteam config (`~/.open-team/config.json`, `stamp` block):
 
@@ -142,7 +139,7 @@ Where the clone comes from is governed by oteam config (`~/.open-team/config.jso
 |------------------------------------------------|-----------|--------------------------------------------------------|-------------------------------------------------------------------------------------------------|
 | absent / `null`                                | plain     | `git@github.com:<repo>.git`                            | Default. No stamp config files are read. `oteam` works against any git repo.                    |
 | `{ host, enforce: false }`                     | soft      | `git@github.com:<repo>.git`                            | Stamp host is recorded for tooling that asks for it; `oteam assign` does not gate.              |
-| `{ host, enforce: true }`                      | enforce   | `<host>/srv/git/<basename>.git` (the stamp server)     | The clone IS the gate: clone failure exits non-zero before any spawn. AGT-050 behaviour.        |
+| `{ host, enforce: true }`                      | enforce   | `<host>/srv/git/<basename>.git` (the stamp server)     | The clone IS the gate: clone failure exits non-zero before the assignment context is emitted.    |
 
 `oteam init` walks you through setting `stamp.host` and `stamp.enforce` interactively. Re-running `oteam init` pre-fills the prompts; press enter to keep current values. Pass `oteam init --skip-stamp` to skip the prompts on a re-run when you only want to refresh the workspace tree or docs blocks.
 
@@ -156,11 +153,11 @@ oteam config stamp set --enforce off  # … or back off
 oteam config stamp clear              # remove the stamp block entirely
 ```
 
-Stale workspaces from prior assigns are GC'd at spawn time: any `/tmp/open-team-issues/agt-N/` directory whose ticket id has no matching ticket in the active workspace is `rm -rf`'d before the new clone. The current run's workspace is also `rm -rf`'d before its clone, so re-assigns are hermetic.
+Stale workspaces from prior assigns are GC'd during prep: any `/tmp/open-team-issues/agt-N/` directory whose ticket id has no matching ticket in the active workspace is `rm -rf`'d before the new clone. The current run's workspace is also `rm -rf`'d before its clone, so re-assigns are hermetic.
 
 ## Per-phase model selection
 
-Each role-pipeline phase can run on a different Claude model. The runner reads `models[phase]` from `~/.open-team/config.json` before each spawn and passes it as `claude --model <id>`. Phase resolution from the ticket's `state:`:
+Each role-pipeline phase can run on a different Claude model. `oteam assign` reads `models[phase]` from `~/.open-team/config.json` during prep and reports the resolved id in the assignment context's `model` field; the orchestrator sets its dispatched subagent's model to that value. Phase resolution from the ticket's `state:`:
 
 | ticket state   | phase            |
 |----------------|------------------|
@@ -187,11 +184,13 @@ oteam config models show         # one phase per line; "(unset)" for unpinned ph
 oteam config models clear spike  # falls back to the role-pipeline default
 ```
 
-Each field is independent. Unset phases fall back to the role-pipeline default (currently `claude-opus-4-7`); validation is "non-empty string", and the SDK rejects unknown ids at spawn time. Re-running `oteam init` against a config that already has any per-phase model set leaves the entire `models` block alone — your customisation wins. A spike that auto-proceeds to implementation in the same session keeps the spike-phase model (one model per spawn).
+Each field is independent. Unset phases fall back to the role-pipeline default (currently `claude-opus-4-7`); validation is "non-empty string", and Claude Code rejects unknown ids when the subagent is dispatched. Re-running `oteam init` against a config that already has any per-phase model set leaves the entire `models` block alone — your customisation wins. A spike that auto-proceeds to implementation within one subagent keeps the spike-phase model (one model per dispatch).
 
 ## Telemetry
 
-Every role-pipeline spawn records one JSON line capturing wall-clock + token usage to `~/.open-team/telemetry/runs.jsonl`. The intent is data-driven model tuning — the per-phase defaults above are educated guesses, and the only way to know whether Sonnet QA actually catches what Opus QA does is to measure both.
+Each role advance records one JSON line capturing wall-clock + token usage to `~/.open-team/telemetry/runs.jsonl` via `oteam telemetry record`, which the orchestrator calls after a role subagent returns (using the `telemetry` handle in the assignment context). The intent is data-driven model tuning — the per-phase defaults above are educated guesses, and the only way to know whether Sonnet QA actually catches what Opus QA does is to measure both.
+
+> **Note (zero-SDK transition):** per-subagent token accounting is being reworked. The previous mechanism pinned `--session-id` on a spawned `claude` process and parsed its JSONL; with in-session subagents that path no longer applies, so token fields may be partial until the rework lands. Wall-clock, phase, model, and outcome are recorded reliably.
 
 Each line looks like:
 
@@ -241,14 +240,14 @@ Paths are resolved to absolute at `add` time, so the registration survives `cd`.
 | # | Source                                                    | Notes                                                         |
 |---|-----------------------------------------------------------|---------------------------------------------------------------|
 | 1 | `--workspace <name-or-path>` flag (or `--vault` alias)    | Per-command override                                          |
-| 2 | `PRODUCT_VAULT_PATH` env var                              | One-off shell override; also propagated to spawns             |
+| 2 | `PRODUCT_VAULT_PATH` env var                              | One-off shell override                                        |
 | 3 | `default` in `~/.open-team/config.json`                   | Set via `oteam config workspace default --set <name>`         |
 | 4 | `~/Documents/product-vault`                               | Implicit fallback if no config exists                         |
 
 `oteam assign` adds two niceties on top:
 
 - **AGT-NNN shorthand**: `oteam assign AGT-001` walks `<workspace>/tickets/<state>/` for a file whose basename starts with `AGT-001-`.
-- **Workspace auto-detection from path**: passing a full path that lives inside a registered workspace root makes that workspace the active one for the run, even if it's not the default. The spawned `_role-run` then inherits `PRODUCT_VAULT_PATH=<that-workspace>` so any follow-up `oteam pull/list/...` from the agent lands in the same workspace.
+- **Workspace auto-detection from path**: passing a full path that lives inside a registered workspace root makes that workspace the active one for the run, even if it's not the default. The resolved workspace path is reported in the assignment context (`vaultPath`) so the subagent's follow-up `oteam pull/list/...` calls land in the same workspace.
 
 ## Claim-on-assign (preventing double-pickup)
 
@@ -284,9 +283,8 @@ Migration steps:
 
 1. `npm install -g @openthink/team` (or `npm link` from a local clone).
 2. Either set `PRODUCT_VAULT_PATH` if your workspace isn't at `~/Documents/product-vault`, or register it via `oteam config workspace add <path>` (see [Config & multiple workspaces](#config--multiple-workspaces)).
-3. Optionally set `OTEAM_MONITORED_ORGS=Org1,Org2` to route those repos' tickets to the "work" kitty socket (preserves the personal/work split agentic-desktop had).
-4. Delete `~/Library/Application Support/AgenticDesktop/vault-assignments.json` (panel-indicator state, no longer used).
-5. Use `oteam pull github <ref>` instead of clicking "Assign to agent" on the Issues panel.
+3. Delete `~/Library/Application Support/AgenticDesktop/vault-assignments.json` (panel-indicator state, no longer used).
+4. Use `oteam pull github <ref>` instead of clicking "Assign to agent" on the Issues panel.
 
 ## Development
 

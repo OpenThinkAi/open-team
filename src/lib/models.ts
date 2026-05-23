@@ -3,12 +3,7 @@
 //
 // ROLE_PIPELINE_MODEL is the fallback used when the user has not pinned a
 // per-phase model in `~/.open-team/config.json`'s `models` block.
-//
-// NORMALISER_MODEL is the one-shot LLM call inside ingestors that turns an
-// unstructured source body into a vault-shape ticket. Intentionally cheaper
-// — it's a text-to-text job with no tools.
 export const ROLE_PIPELINE_MODEL = "claude-opus-4-7";
-export const NORMALISER_MODEL = "claude-sonnet-4-6";
 
 // AGT-107: when the heuristic fires (manual + populated AC + downshift on),
 // Product spawns on Haiku 4.5 instead of `models.product`. Haiku handles the

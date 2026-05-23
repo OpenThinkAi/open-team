@@ -74,7 +74,7 @@ export async function runPull(opts: PullOptions): Promise<PullResult> {
     return { path: existing.filePath, reused: true, ticketID: existing.id };
   }
 
-  const normalised = await normaliseSource(payload);
+  const normalised = normaliseSource(payload);
   const id = nextTicketID(vault);
   const slug = slugify(payload.title);
   const filename = `${id}-${slug}.md`;

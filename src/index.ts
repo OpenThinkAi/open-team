@@ -16,7 +16,7 @@ const program = new Command();
 program
   .name("oteam")
   .description(
-    "Source-agnostic workspace-driven role pipeline for spawning Claude agents against tickets",
+    "Source-agnostic workspace-driven role pipeline for driving Claude agents against tickets (in-session, zero-SDK)",
   )
   .version(pkg.version);
 
@@ -75,11 +75,11 @@ program
 program
   .command("assign <ticket-or-id>")
   .description(
-    "Drive the role pipeline against a ticket (full path or AGT-NNN id)",
+    "Prepare a ticket's workspace and emit assignment context for an in-session orchestrator (full path or AGT-NNN id)",
   )
   .option(
     "--inline",
-    "Run the role pipeline in the current terminal instead of spawning kitty",
+    "(deprecated, no-op) assign no longer spawns claude — it prepares the workspace and prints assignment context for an in-session subagent",
   )
   .option("-w, --workspace <name-or-path>", "Use a specific registered workspace")
   .addOption(new Option("--vault <name-or-path>").hideHelp())
@@ -88,9 +88,9 @@ program
       ticketPath: string,
       opts: { inline?: boolean; workspace?: string; vault?: string },
     ) => {
+      // `--inline` is accepted-but-ignored for transitional compatibility.
       await assignTicket({
         ticketPath,
-        workInline: opts.inline,
         vault: opts.workspace ?? opts.vault,
       });
     },

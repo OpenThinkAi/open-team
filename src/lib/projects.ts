@@ -176,7 +176,7 @@ repos: []
 
 # ${id}
 
-<!-- Canonical design doc for this project. Tickets reference this project via \`project: ${id}\` in their frontmatter. The role-pipeline auto-loads this README into the spawned agent's context, so anything authoritative about the project's architecture, scope, naming, or defaults belongs here. -->
+<!-- Canonical design doc for this project. Tickets reference this project via \`project: ${id}\` in their frontmatter. The role-pipeline auto-loads this README into the role subagent's context, so anything authoritative about the project's architecture, scope, naming, or defaults belongs here. -->
 
 <!-- Conventions when editing this README:
   - Design-doc only. Anything that would drift over time — ticket lists, status
