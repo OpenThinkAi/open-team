@@ -11,10 +11,13 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  BASE_SHA_FILENAME,
   gcOrphanWorkspaces,
   prepareAgentWorkspace,
   type CloneResult,
   type CloneRunner,
+  type RevParseResult,
+  type RevParseRunner,
 } from "../src/lib/workspace.ts";
 
 const ORIGINAL_HOME = process.env.HOME;
@@ -39,6 +42,12 @@ function recordCloneRunner(
     return result;
   };
 }
+
+function fakeRevParseRunner(result: RevParseResult): RevParseRunner {
+  return () => result;
+}
+
+const FAKE_BASE_SHA = "0123456789abcdef0123456789abcdef01234567";
 
 function withFakeHome(): string {
   const fakeHome = mkdtempSync(join(tmpdir(), "oteam-home-"));
@@ -179,6 +188,95 @@ describe("prepareAgentWorkspace", () => {
     assert.equal(existsSync(join(rootDir, "agt-014")), false, "orphan agt-014 should be swept");
     assert.equal(existsSync(join(rootDir, "agt-007", "repo")), true);
     assert.equal(existsSync(join(rootDir, "stamp-cli-fix")), true, "non-ticket dirs should not be swept");
+  });
+
+  it("records the clone-time base SHA on the result and in a sibling file", () => {
+    fakeHome = withFakeHome();
+    const out = prepareAgentWorkspace({
+      ticketId: "AGT-014",
+      repoSlug: "OpenThinkAi/open-team",
+      cloneUri: STAMP_URI,
+      cloneRunner: recordCloneRunner({ status: 0, stderr: "" }),
+      revParseRunner: fakeRevParseRunner({
+        status: 0,
+        stdout: `${FAKE_BASE_SHA}\n`,
+      }),
+      rootDir,
+    });
+
+    assert.equal(out.baseSha, FAKE_BASE_SHA, "baseSha must be returned");
+    const expectedFile = join(rootDir, "agt-014", BASE_SHA_FILENAME);
+    assert.equal(out.baseShaFile, expectedFile);
+    assert.equal(existsSync(expectedFile), true, "base-sha file must be written");
+    assert.equal(
+      readFileSync(expectedFile, "utf8").trim(),
+      FAKE_BASE_SHA,
+      "base-sha file content must be the recorded SHA",
+    );
+  });
+
+  it("writes the base-sha file as a sibling to repo/, not inside it", () => {
+    fakeHome = withFakeHome();
+    const out = prepareAgentWorkspace({
+      ticketId: "AGT-015",
+      repoSlug: "OpenThinkAi/open-team",
+      cloneUri: STAMP_URI,
+      cloneRunner: recordCloneRunner({ status: 0, stderr: "" }),
+      revParseRunner: fakeRevParseRunner({
+        status: 0,
+        stdout: `${FAKE_BASE_SHA}\n`,
+      }),
+      rootDir,
+    });
+    // Sibling to repo/ so it survives operations the agent runs inside repo/.
+    assert.equal(out.baseShaFile, join(rootDir, "agt-015", BASE_SHA_FILENAME));
+    assert.equal(
+      existsSync(join(rootDir, "agt-015", "repo", BASE_SHA_FILENAME)),
+      false,
+      "base-sha must not be written inside the clone",
+    );
+  });
+
+  it("leaves baseSha null (non-fatal) when rev-parse fails", () => {
+    fakeHome = withFakeHome();
+    const out = prepareAgentWorkspace({
+      ticketId: "AGT-016",
+      repoSlug: "OpenThinkAi/open-team",
+      cloneUri: STAMP_URI,
+      cloneRunner: recordCloneRunner({ status: 0, stderr: "" }),
+      revParseRunner: fakeRevParseRunner({ status: 128, stdout: "" }),
+      rootDir,
+    });
+    // Clone still succeeded; only the freshness-guard hint is absent.
+    assert.equal(out.baseSha, null);
+    assert.equal(out.baseShaFile, null);
+    assert.equal(existsSync(out.path), true, "clone must still succeed");
+    assert.equal(
+      existsSync(join(rootDir, "agt-016", BASE_SHA_FILENAME)),
+      false,
+      "no base-sha file when the SHA couldn't be resolved",
+    );
+  });
+
+  it("rejects a malformed rev-parse SHA without writing a file", () => {
+    fakeHome = withFakeHome();
+    const out = prepareAgentWorkspace({
+      ticketId: "AGT-017",
+      repoSlug: "OpenThinkAi/open-team",
+      cloneUri: STAMP_URI,
+      cloneRunner: recordCloneRunner({ status: 0, stderr: "" }),
+      revParseRunner: fakeRevParseRunner({
+        status: 0,
+        stdout: "not-a-sha\n",
+      }),
+      rootDir,
+    });
+    assert.equal(out.baseSha, null, "garbage SHA must be ignored");
+    assert.equal(out.baseShaFile, null);
+    assert.equal(
+      existsSync(join(rootDir, "agt-017", BASE_SHA_FILENAME)),
+      false,
+    );
   });
 });
 
