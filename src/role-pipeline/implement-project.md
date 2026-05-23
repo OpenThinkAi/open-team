@@ -76,7 +76,16 @@ cat "$PROJECT_DIR/README.md"
 ls "$PROJECT_DIR/"
 ```
 
-Build the dependency graph from ticket comments ("Sequencing: blocked by AGT-XXX" / "depends on AGT-YYY"), then **group it into waves**: a wave is the set of active tickets whose dependencies are all already merged. Tickets within a wave run in parallel; waves run in sequence. Mark user-action tickets as gates and exclude deferred/parking-lot tickets unless told otherwise.
+Build the dependency graph. **Read each ticket's structured `blocked-by:` frontmatter field — it is the source of truth.** It is an inline array of AGT ids (e.g. `blocked-by: [AGT-012, AGT-013]`); an empty `[]` means no dependencies. Parse it deterministically — do **not** LLM-infer it from prose. The ticket file's path comes from `oteam project show <project-id> --tickets`; read the frontmatter directly, e.g.:
+
+```sh
+# (sed, not awk $2 — skill arg-substitution eats `$2` in a skill body)
+grep '^blocked-by:' "<ticket-file>.md" | sed 's#^blocked-by: *##'
+```
+
+Back-compat for older tickets: if a ticket has **no** `blocked-by:` field (legacy tickets filed before the field existed), fall back to scanning its comments for free-text dependency notes ("Sequencing: blocked by AGT-XXX" / "depends on AGT-YYY"). Prefer the structured field whenever it is present.
+
+Then **group it into waves**: a wave is the set of active tickets whose dependencies are all already merged. Tickets within a wave run in parallel; waves run in sequence. Mark user-action tickets as gates and exclude deferred/parking-lot tickets unless told otherwise.
 
 ## Phase 1 — Confirm the waves
 

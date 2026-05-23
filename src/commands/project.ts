@@ -1,7 +1,13 @@
 import { Command, Option } from "commander";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { basename } from "node:path";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, join } from "node:path";
 import {
   listProjects,
   projectDir,
@@ -27,10 +33,23 @@ export function buildProjectCommand(): Command {
     .description("Scaffold <workspace>/projects/<id>/README.md and open in $EDITOR")
     .option("-w, --workspace <name-or-path>", "Use a specific registered workspace")
     .addOption(new Option("--vault <name-or-path>").hideHelp())
+    .option(
+      "--from-doc <path>",
+      "Seed a design doc as a sibling file in the project dir (e.g. design.md)",
+    )
     .option("--no-edit", "Skip opening the README in $EDITOR after scaffolding")
-    .action((id: string, opts: { workspace?: string; vault?: string; edit: boolean }) => {
-      runInit(id, { vault: opts.workspace ?? opts.vault, edit: opts.edit });
-    });
+    .action(
+      (
+        id: string,
+        opts: { workspace?: string; vault?: string; fromDoc?: string; edit: boolean },
+      ) => {
+        runInit(id, {
+          vault: opts.workspace ?? opts.vault,
+          fromDoc: opts.fromDoc,
+          edit: opts.edit,
+        });
+      },
+    );
 
   project
     .command("list")
@@ -54,15 +73,38 @@ export function buildProjectCommand(): Command {
   return project;
 }
 
-function runInit(
+export function runInit(
   id: string,
-  opts: { vault?: string; edit: boolean },
+  opts: { vault?: string; fromDoc?: string; edit: boolean },
 ): void {
   if (!isValidProjectId(id)) {
     process.stderr.write(
       `oteam project init: invalid project id "${id}" — use lowercase letters, digits, and hyphens (e.g. think-cli-v2)\n`,
     );
     process.exit(2);
+  }
+
+  // Validate the source doc up front so we fail before scaffolding anything.
+  let fromDoc: { src: string; dest: string } | null = null;
+  if (opts.fromDoc !== undefined && opts.fromDoc.length > 0) {
+    const src = opts.fromDoc;
+    let isFile = false;
+    try {
+      isFile = statSync(src).isFile();
+    } catch {
+      isFile = false;
+    }
+    if (!isFile) {
+      process.stderr.write(
+        `oteam project init: --from-doc "${src}" is not a readable file\n`,
+      );
+      process.exit(1);
+    }
+    // Land the doc as a sibling so readProject's sibling discovery picks it up.
+    // Avoid colliding with the scaffolded README.md.
+    const base = basename(src);
+    const destName = base === "README.md" ? "design.md" : base;
+    fromDoc = { src, dest: destName };
   }
 
   const vaultPath = resolveVaultPath({ flagValue: opts.vault });
@@ -79,6 +121,12 @@ function runInit(
   mkdirSync(dir, { recursive: true });
   writeFileSync(readme, projectFrontmatterTemplate(id), "utf8");
   process.stdout.write(`✅ Created project ${id}\n   ${readme}\n`);
+
+  if (fromDoc) {
+    const destPath = join(dir, fromDoc.dest);
+    copyFileSync(fromDoc.src, destPath);
+    process.stdout.write(`   seeded design doc → ${destPath}\n`);
+  }
 
   if (opts.edit !== false) {
     openInEditor(readme);

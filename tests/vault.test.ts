@@ -26,6 +26,7 @@ created: 2026-04-30
 updated: 2026-05-01
 project: open-team
 repo: OpenThinkAi/open-team
+blocked-by: [AGT-012, AGT-013]
 linked-github: https://github.com/x/y/issues/9
 linked-pr:
 priority: high
@@ -53,6 +54,7 @@ describe("parseTicket", () => {
       assert.equal(t.team, "engineering");
       assert.equal(t.project, "open-team");
       assert.equal(t.repo, "OpenThinkAi/open-team");
+      assert.deepEqual(t.blockedBy, ["AGT-012", "AGT-013"]);
       assert.equal(t.linkedGitHub, "https://github.com/x/y/issues/9");
       assert.equal(t.linkedPR, null);
       assert.equal(t.priority, "high");
@@ -70,6 +72,22 @@ describe("parseTicket", () => {
       const path = join(root, "broken.md");
       writeFileSync(path, "---\ntitle: no id\n---\n");
       assert.equal(parseTicket(path), null);
+    } finally {
+      rmSync(root, { recursive: true });
+    }
+  });
+
+  it("defaults blocked-by to [] for legacy tickets without the field", () => {
+    const root = mkdtempSync(join(tmpdir(), "vault-"));
+    try {
+      const path = join(root, "AGT-001-legacy.md");
+      writeFileSync(
+        path,
+        "---\nid: AGT-001\ntitle: legacy\nstate: triage\n---\n",
+      );
+      const t = parseTicket(path);
+      assert.ok(t);
+      assert.deepEqual(t.blockedBy, []);
     } finally {
       rmSync(root, { recursive: true });
     }

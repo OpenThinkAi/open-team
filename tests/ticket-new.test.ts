@@ -15,6 +15,7 @@ import {
   parseLabels,
   parseSource,
 } from "../src/lib/frontmatter.ts";
+import { parseTicket } from "../src/lib/vault.ts";
 
 function makeVault(): { vault: string; cleanup: () => void } {
   const vault = mkdtempSync(join(tmpdir(), "vault-ticket-new-"));
@@ -51,6 +52,8 @@ describe("oteam ticket new", () => {
       assert.equal(fm.priority, "medium");
       assert.equal(fm.project, "");
       assert.equal(fm.repo, "");
+      assert.equal(fm["blocked-by"], "[]");
+      assert.equal(parseLabels(fm["blocked-by"] ?? "[]").length, 0);
       assert.equal(fm["linked-github"], "");
       assert.equal(parseLabels(fm.labels ?? "[]").length, 0);
 
@@ -78,6 +81,85 @@ describe("oteam ticket new", () => {
       });
       const { fm } = readTicket(result.path);
       assert.equal(fm.project, "growth-v2");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("writes the repo field when --repo is provided", () => {
+    const { vault, cleanup } = makeVault();
+    try {
+      const result = runTicketNew({
+        title: "Wire repo frontmatter",
+        repo: "OpenThinkAi/open-team",
+        vault,
+      });
+      const { fm } = readTicket(result.path);
+      assert.equal(fm.repo, "OpenThinkAi/open-team");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("rejects a --repo that isn't an owner/name slug", () => {
+    const { vault, cleanup } = makeVault();
+    try {
+      assert.throws(
+        () => runTicketNew({ title: "Bad repo", repo: "not-a-slug", vault }),
+        /owner\/name slug/,
+      );
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("records a single --blocked-by as a structured list that round-trips", () => {
+    const { vault, cleanup } = makeVault();
+    try {
+      const result = runTicketNew({
+        title: "Depends on one thing",
+        blockedBy: ["AGT-012"],
+        vault,
+      });
+      const { fm } = readTicket(result.path);
+      assert.equal(fm["blocked-by"], "[AGT-012]");
+      assert.deepEqual(parseLabels(fm["blocked-by"] ?? "[]"), ["AGT-012"]);
+
+      const ticket = parseTicket(result.path);
+      assert.ok(ticket);
+      assert.deepEqual(ticket.blockedBy, ["AGT-012"]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("records repeated --blocked-by as a structured list that round-trips", () => {
+    const { vault, cleanup } = makeVault();
+    try {
+      const result = runTicketNew({
+        title: "Depends on two things",
+        blockedBy: ["AGT-012", "AGT-013"],
+        vault,
+      });
+      const { fm } = readTicket(result.path);
+      assert.equal(fm["blocked-by"], "[AGT-012, AGT-013]");
+
+      const ticket = parseTicket(result.path);
+      assert.ok(ticket);
+      assert.deepEqual(ticket.blockedBy, ["AGT-012", "AGT-013"]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("rejects a --blocked-by value that isn't an AGT-NNN id", () => {
+    const { vault, cleanup } = makeVault();
+    try {
+      assert.throws(
+        () =>
+          runTicketNew({ title: "Bad dep", blockedBy: ["nope"], vault }),
+        /AGT-NNN id/,
+      );
     } finally {
       cleanup();
     }

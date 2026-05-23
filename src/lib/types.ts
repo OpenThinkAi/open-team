@@ -22,6 +22,7 @@ export interface VaultTicket {
   updatedAt: Date;
   project: string | null;
   repo: string | null;
+  blockedBy: string[];
   linkedGitHub: string | null;
   linkedPR: string | null;
   priority: string | null;
