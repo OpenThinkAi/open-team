@@ -11,7 +11,7 @@ import type { TokenUsage } from "../lib/claude-session.ts";
 
 export function buildTelemetryCommand(): Command {
   const telemetry = new Command("telemetry").description(
-    "Per-phase wall-clock + token telemetry for role-pipeline spawns",
+    "Per-phase wall-clock + token telemetry for role-pipeline runs",
   );
 
   telemetry
@@ -57,18 +57,22 @@ export function buildTelemetryCommand(): Command {
       }
     });
 
-  // Hidden internal subcommand invoked by the runner's kitty wrapper after
-  // `claude` exits. Users never call this directly. Documented as internal.
+  // Hidden internal subcommand the /implement-project orchestrator calls
+  // after a role subagent returns, using the telemetry handle from the
+  // oteam:assignment block. Users never call this directly.
+  // NOTE: token fields depend on a session JSONL the old spawn pinned via
+  // `claude --session-id`; in-session subagents don't produce one, so token
+  // accounting is partial pending rework. Wall-clock/phase/model/outcome record.
   telemetry
     .command("record", { hidden: true })
     .description("(internal) Record one phase's telemetry line")
     .requiredOption("--ticket <id>", "Ticket id (e.g. AGT-108)")
     .requiredOption("--phase <name>", "Phase name (product|spike|implementation|qa)")
-    .requiredOption("--model <id>", "Resolved model id passed to claude")
-    .requiredOption("--session <uuid>", "Session UUID passed to `claude --session-id`")
-    .requiredOption("--started-at <iso>", "ISO timestamp captured before spawning claude")
-    .requiredOption("--exit-code <n>", "claude's exit code", parseSignedInt)
-    .option("--cwd <path>", "Working directory the spawn ran in (defaults to $PWD)")
+    .requiredOption("--model <id>", "Resolved model id the subagent ran on")
+    .requiredOption("--session <uuid>", "Session UUID from the oteam:assignment block")
+    .requiredOption("--started-at <iso>", "ISO timestamp from the oteam:assignment block (prep time)")
+    .requiredOption("--exit-code <n>", "Role exit code (0 = clean)", parseSignedInt)
+    .option("--cwd <path>", "Worktree the role ran in (defaults to $PWD)")
     .action(
       (opts: {
         ticket: string;

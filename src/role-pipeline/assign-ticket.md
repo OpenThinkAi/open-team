@@ -2,7 +2,7 @@
 description: Drive a ticket from the product-vault through its role pipeline. Argument: absolute path to the ticket's .md file.
 ---
 
-You are working a `product-vault` ticket. The user invoked `oteam assign <path>`; the open-team CLI spawned this terminal and is running you via `@anthropic-ai/claude-agent-sdk`. Your job is to advance the ticket one role at a time, pause for human alignment at the right boundaries, and stop.
+You are working a `product-vault` ticket via the `/assign-ticket` role-pipeline skill. You may be running as a **Task subagent** dispatched by the in-session `/implement-project` orchestrator, or invoked directly (by a human, or by hand). Either way you run inside the user's interactive Claude Code session — **not** via `claude -p` or the Agent SDK. `oteam assign <path>` has already prepared your workspace (claimed the issue when configured, cloned the worktree, resolved the model); the prepared worktree path is in the `oteam:assignment` block it printed (and in your dispatch prompt). Your job is to advance the ticket one role at a time, STOP at the role-handoff boundary, and return.
 
 **Argument**: `$ARGUMENTS` — absolute path to the ticket's `.md` file (e.g. `/Users/mattpardini/Documents/product-vault/tickets/triage/AGT-002-file-ticket-slash-command.md`).
 
@@ -13,7 +13,9 @@ You are working a `product-vault` ticket. The user invoked `oteam assign <path>`
 3. **No commits, no PRs, no Linear.** Vault tickets do not necessarily map to a code repo. Only act on code if the ticket's `repo:` field is set AND the work demands it.
 4. **STOP at every role-handoff boundary.** When your role is done, write a STOP marker (visual banner per Output discipline below) and let the human decide whether to continue.
 5. **3-attempt cap on any failing operation.** If a step fails (e.g., file mv fails, frontmatter parse fails, build/test fails), you get 3 tries before STOPPing.
-6. **Never read or write inside `$HOME/Development/<repo>`.** That tree may have uncommitted in-flight work; entangling with it is a sterile-field violation. For repo-bound tickets, the `oteam` runner has already prepared an isolated agent worktree at `/tmp/open-team-issues/<ticket-id-lowercased>/repo` and spawned you cd'd into it — that's your only valid working directory. The runner clones from the URI recorded for the repo in `~/.open-team/config.json` and sets your cwd to it; the worktree is isolated from your primary, so AC-shaped requirements like "primary's `git remote -v` is byte-equal before/after a spawn" are satisfied by construction. If your `$PWD` is not the prepared workspace (e.g. you invoked the slash command by hand outside of `oteam assign`), set up the workspace yourself before reading any repo file — see Phase 3 Step 0.
+6. **Never read or write inside `$HOME/Development/<repo>`.** That tree may have uncommitted in-flight work; entangling with it is a sterile-field violation. For repo-bound tickets, `oteam assign` has already prepared an isolated agent worktree at `/tmp/open-team-issues/<ticket-id-lowercased>/repo` — `cd` into it (its path is in the `oteam:assignment` block / your dispatch prompt); that's your only valid working directory. The prep clones from the URI recorded for the repo in `~/.open-team/config.json`; the worktree is isolated from your primary, so AC-shaped requirements like "primary's `git remote -v` is byte-equal before/after a run" are satisfied by construction. If your `$PWD` is not the prepared workspace (e.g. you invoked the slash command by hand outside of `oteam assign`), set up the workspace yourself before reading any repo file — see Phase 3 Step 0.
+
+7. **Orchestrated mode: honor a stop-before-merge instruction.** When your dispatch prompt tells you to stop before `stamp merge` (the `/implement-project` orchestrator does this so the human can approve merges per wave), run `stamp review` if your role reaches it, then STOP and report the review result as "ready to merge" (GREEN) or the blocking reasons (RED) — do not run `stamp merge` or push. A later dispatch runs the merge. When invoked directly with no such instruction, drive the role through merge as normal (Phase 5).
 
 ## Phase 0 — Read the ticket
 
@@ -61,11 +63,11 @@ Write the comment in this shape:
 - <bullet 2>
 ```
 
-If your appended system context flags the **AGT-107 haiku-downshift heuristic** as active (a `# Product agent: haiku-downshift heuristic active` block), use the header `### YYYY-MM-DD — Product agent (haiku-downshift)` instead of the standard form. The runner has already spawned you on Haiku 4.5; the suffix makes the heuristic visible in the ticket's audit trail.
+If your appended system context flags the **AGT-107 haiku-downshift heuristic** as active (a `# Product agent: haiku-downshift heuristic active` block), use the header `### YYYY-MM-DD — Product agent (haiku-downshift)` instead of the standard form. `oteam assign` resolved Haiku 4.5 for this run (you were dispatched on it); the suffix makes the heuristic visible in the ticket's audit trail.
 
 ## Phase 3 — Engineering agent (state: refined → spike phase)
 
-**Step 0 — Workspace is already prepared.** When `oteam assign` spawned you against a repo-bound ticket, it already cloned `/tmp/open-team-issues/<ticket-id-lowercased>/repo` from the URI recorded for the repo in `~/.open-team/config.json` and set your cwd to it. Confirm with `pwd` and `git remote -v`; you should see exactly one remote, `origin`, pointing at the URI recorded for this repo.
+**Step 0 — Workspace is already prepared.** When `oteam assign` prepared the workspace for a repo-bound ticket, it already cloned `/tmp/open-team-issues/<ticket-id-lowercased>/repo` from the URI recorded for the repo in `~/.open-team/config.json` and set your cwd to it. Confirm with `pwd` and `git remote -v`; you should see exactly one remote, `origin`, pointing at the URI recorded for this repo.
 
 Cost trade: a fresh clone per assign adds a few seconds vs. the older `git worktree add` fast path. That's an intentional trade for AC-grade isolation — the agent worktree shares no `.git/objects` and no remotes with your primary, and removing or renaming any remote inside the worktree cannot leak back to your daily flow.
 
@@ -234,7 +236,13 @@ Branch name: `agt/<ticket-id-lowercased>` (e.g. `agt/agt-003`). Vault ticket IDs
 5. Re-source in the current shell: `set -a; . ~/.open-team/env-<owner>-<name>; set +a`.
 6. Retry the failing command. If it now works, continue normally. If it fails for a *different* reason, that's a regular failure — count it against the 3-attempt cap.
 
-The `oteam` spawn wrapper already sources `~/.open-team/env-<owner>-<name>` (and `~/.open-team/env-<personal|work>`) if they exist, so values written here are inherited automatically by every future spawn for this repo. One-time setup per repo, not per session.
+Values written to `~/.open-team/env-<owner>-<name>` persist across runs: `oteam assign` lists it (plus the primary checkout's `.env`/`.env.local`) in the assignment block's `envFiles`, so a future run can re-source it. **Source `envFiles` yourself before build/install/test** — guard each with `[ -r ]` since some may not exist yet:
+
+```sh
+set -a; for f in <envFiles from the assignment block>; do [ -r "$f" ] && . "$f"; done; set +a
+```
+
+One-time setup per repo, not per session.
 
 When tests pass:
 
@@ -353,7 +361,7 @@ For each fence in `$STAMP_REVIEW_OUT`, parse it (Step 1) and then run Steps 2–
 
 3. **Emit survivors via `think retro`.** Two-tool recipe: write the observation to a tempfile via the agent's `Write` tool (so untrusted text never touches a shell parser), then read it into a bash variable with `$(< file)` (file-read, not re-eval) and pass to `think retro`. Concretely:
 
-   - **Validate the candidate's metadata.** Validate the `reviewer="…"` attribute against `[a-z][a-z0-9_-]*`; reject (STOP with `🛑 BLOCKED — Off-spec reviewer attribute on STAMP-RETRO fence`) if off-spec. Validate the candidate's `kind` against the four-element enum (`convention | invariant | prior_decision | gotcha`); if it isn't one of those, **omit the `--kind` flag** (the retro lands without a kind — AC 4 of AGT-173). Do not STOP on an off-spec kind; only an off-spec reviewer attribute STOPs.
+   - **Validate the candidate's metadata.** Validate the `reviewer="…"` attribute against `[a-z][a-z0-9_-]*`; reject (STOP with `🛑 BLOCKED — Off-spec reviewer attribute on STAMP-RETRO fence`) if off-spec. Validate the candidate's `kind` against the four-element enum (`convention | invariant | prior_decision | gotcha`); a valid value is passed to `think retro` as `--topic <kind>` (the installed `think` takes `--topic <tag>`, an open string, in place of the retired `--kind`). If it isn't one of the four, **omit the `--topic` flag** (the retro lands without a topic — AC 4 of AGT-173). Do not STOP on an off-spec kind; only an off-spec reviewer attribute STOPs.
    - **Derive the cortex name** via the rule pinned above: `<owner>/<name>` → lowercase `<name>`. Use the literal value in the `--cortex` argument; this is agent-controlled (sourced from the ticket frontmatter), so it is safe in shell.
    - **Write the observation to a tempfile.** Use the agent's `Write` tool with `file_path=/tmp/retro-obs-<TICKET-ID>-<reviewer>-<index>.txt` and `content=` set to the **full observation text only** — no kind/reviewer/ticket/SHA appendix, since think captures emission metadata itself. The tool-call argv bypasses bash entirely, so any `$(…)`, backticks, or quotes in the observation are treated as literal data.
    - **Emit the retro.** Compose the bash command with the literal cortex name and (if present) the literal validated kind substituted in — those are agent-controlled. The observation is read from the tempfile via `$(< /tmp/retro-obs-...)`:
@@ -361,8 +369,8 @@ For each fence in `$STAMP_REVIEW_OUT`, parse it (Step 1) and then run Steps 2–
      ```sh
      OBS=$(< /tmp/retro-obs-<TICKET-ID>-<reviewer>-<index>.txt)
      think retro "$OBS" --cortex <validated-cortex-name>
-     # …or, when a validated kind is present:
-     think retro "$OBS" --cortex <validated-cortex-name> --kind <validated-kind>
+     # …or, when a validated kind is present, pass it as --topic:
+     think retro "$OBS" --cortex <validated-cortex-name> --topic <validated-kind>
      ```
 
      `$VAR` interpolation inside double quotes does NOT re-evaluate `$()`/backticks contained in the value, so attacker-shaped observation text is passed as a single argv item, untouched.

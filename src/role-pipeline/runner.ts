@@ -1,8 +1,7 @@
-import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { resolve, basename, dirname, join } from "node:path";
+import { resolve, join } from "node:path";
 import {
   findVaultRootForPath,
   getTelemetryEnabled,
@@ -22,20 +21,10 @@ import {
   type IssueClaim,
 } from "../lib/github.ts";
 import {
-  envSourcingPrefix,
-  findKittyBinary,
-  findKittySocket,
-  isMacOS,
-  kittyLaunch,
-  preferredKittyContext,
-  shellEscape,
-} from "../lib/kitty.ts";
-import {
   HAIKU_PRODUCT_MODEL,
   phaseForState,
   resolveModelForTicket,
 } from "../lib/models.ts";
-import { recordPhase } from "../lib/telemetry.ts";
 import {
   formatProjectContextForPrompt,
   projectDir,
@@ -49,10 +38,6 @@ import {
   resolveVault,
 } from "../lib/vault.ts";
 import {
-  findSessionFile,
-  lastAssistantText,
-} from "../lib/claude-session.ts";
-import {
   prepareAgentWorkspace,
   type PreparedWorkspace,
 } from "../lib/workspace.ts";
@@ -61,8 +46,6 @@ import { installRolePipelineSlashCommand } from "./install-slash-command.ts";
 export interface AssignOptions {
   ticketPath: string;
   vault?: string;
-  monitoredOrgs?: string[];
-  workInline?: boolean;
   /**
    * Injectable URI resolver for testing — bypasses the config lookup and
    * prompt so unit tests can exercise the runner logic without I/O.
@@ -73,7 +56,56 @@ export interface AssignOptions {
 export type CloneUriResolver = (slug: string) => Promise<string>;
 
 /**
- * Resolve the clone URI for `oteam assign`:
+ * The deterministic prep `oteam assign` hands back to the in-session
+ * orchestrator. As of the zero-SDK conversion `oteam assign` no longer spawns
+ * `claude` — it claims the issue, clones a hermetic worktree, resolves the
+ * per-phase model, and emits this so an interactive Claude Code parent can
+ * dispatch a Task subagent into the prepared worktree. Everything here is
+ * filesystem/git/concurrency work that belongs in tested TypeScript, not in a
+ * markdown skill.
+ */
+export interface AssignmentContext {
+  ticketId: string;
+  ticketPath: string;
+  /** Ticket `state:` (triage|refined|in-progress|qa|blocked|done|…). */
+  state: string;
+  /** Role-pipeline phase for this state, or null on blocked/done. */
+  phase: string | null;
+  vaultPath: string;
+  /** Prepared agent worktree, or null for workspace-only (no `repo:`) tickets. */
+  workspacePath: string | null;
+  /** Resolved clone URI of the prepared worktree, or null when none. */
+  originUrl: string | null;
+  /**
+   * Env files the subagent should source before build/install/test, in order
+   * (guard each with `[ -r ]` — some, like the per-repo secrets file, may not
+   * exist until the user supplies missing tokens mid-run). Empty for
+   * workspace-only tickets.
+   */
+  envFiles: string[];
+  /** Per-phase model the subagent should run on (advisory). */
+  model: string;
+  /** First instruction for the subagent — the existing role-pipeline skill. */
+  slashCommand: string;
+  /** Path to the `--append-system-prompt` payload, or null when none. */
+  systemPromptFile: string | null;
+  haikuDownshift: boolean;
+  /**
+   * Telemetry handle for the orchestrator's teardown `oteam telemetry record`
+   * call after the subagent finishes. Null when telemetry is off or the state
+   * has no role agent. (Token accounting for in-session subagents is being
+   * reworked separately — wall-clock/phase/model/outcome still record.)
+   */
+  telemetry: {
+    sessionId: string;
+    phase: string;
+    model: string;
+    startedAt: string;
+  } | null;
+}
+
+/**
+ * Resolve the clone URI for `oteam assign` (AGT-097):
  * 1. Look up `config.repos[slug]`; if found, return its clone-uri.
  * 2. Prompt on first encounter (interactive only); record the result.
  * 3. On non-TTY without a recorded URI: throw `NoTTYError`.
@@ -141,11 +173,24 @@ export class StampEnforceError extends Error {
 }
 
 export async function assignTicket(opts: AssignOptions): Promise<void> {
+  const ctx = await prepareAssignment(opts);
+  process.stdout.write(assignmentSummary(ctx) + "\n\n");
+  process.stdout.write(assignmentBlock(ctx) + "\n");
+}
+
+/**
+ * Do all the deterministic prep and return the assignment context. Split out
+ * from `assignTicket` (which owns stdout) so the choreography is unit-testable
+ * and reusable by future in-process callers.
+ */
+export async function prepareAssignment(
+  opts: AssignOptions,
+): Promise<AssignmentContext> {
   const config = readConfig();
 
   // Resolve the ticket file path. Three input shapes:
-  //   1. AGT-NNN              — look up in the resolved vault's tickets/<state>/
-  //   2. /full/path/to/X.md   — auto-detect vault from path if registered
+  //   1. AGT-NNN              — look up in the resolved workspace's tickets/<state>/
+  //   2. /full/path/to/X.md   — auto-detect workspace from path if registered
   //   3. relative path        — resolve against cwd, same auto-detect rule
   let resolvedVault = resolveVault({ flagValue: opts.vault, config });
   let ticketPath: string;
@@ -154,8 +199,8 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
   } else {
     ticketPath = resolve(opts.ticketPath);
     if (!opts.vault) {
-      // Auto-detect: a path inside a registered vault is more specific than
-      // the config default, so override silently when no --vault was passed.
+      // Auto-detect: a path inside a registered workspace is more specific than
+      // the config default, so override silently when no --workspace was passed.
       const detected = findVaultRootForPath(ticketPath, config);
       if (detected) resolvedVault = detected;
     }
@@ -170,28 +215,19 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
 
   // Pre-flight: claim the underlying GH issue (when configured + applicable).
   // Only fires for github-sourced tickets with a parseable URL and an
-  // operator-set `botIdentity` (or OTEAM_BOT_IDENTITY env override). The
-  // unconfigured path is a silent no-op so legacy installs keep working.
-  // On any non-ok outcome the runner exits before any expensive work
-  // (workspace prep, kitty spawn, claude SDK init).
+  // operator-set `botIdentity`. On any non-ok outcome the runner exits before
+  // any expensive work (clone-uri prompt, workspace prep).
   enforceClaimOrExit(ticket.source, config);
 
-  // Make sure the spawned `claude` session can find `/assign-ticket`.
+  // Make sure the in-session orchestrator/subagent can resolve `/assign-ticket`.
   installRolePipelineSlashCommand();
-
-  const claudePath = findToolOnPath("claude");
-  if (!claudePath) {
-    throw new Error(
-      "claude CLI not found on PATH — install Claude Code (https://claude.com/claude-code) first",
-    );
-  }
 
   // AGT-097: resolve the clone URI from the per-repo config map. First
   // encounter prompts once (interactive) or refuses (non-TTY). When
   // stamp.enforce is on, the URI must start with stamp.host.
   let workspace: PreparedWorkspace | null = null;
+  let cloneUri: string | null = null;
   if (ticket.repo) {
-    let cloneUri: string;
     try {
       cloneUri = await resolveCloneUriForAssign(
         config,
@@ -219,16 +255,14 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
   }
 
   // AGT-023: when the ticket carries `project: <id>`, load the project's
-  // README + sibling-file index. AGT-107 may also append a small Product-
-  // agent hint when the haiku-downshift heuristic fires; both share the
-  // same `--append-system-prompt` payload (single tmp file, single flag).
+  // README + sibling-file index. AGT-107 may also append a Product-agent hint
+  // (haiku downshift) and AGT-099 a push-disabled hint; all three share the
+  // same system-prompt payload (single tmp file the subagent can `cat`).
   const projectContext = loadProjectContext(resolvedVault.path, ticket.project);
 
-  // AGT-105: pick the per-phase model from oteam config based on the
-  // ticket's current state. Each `oteam assign` spawn drives one phase, so
-  // resolving once here covers both the kitty and inline spawn shapes.
-  // AGT-107 layers a Haiku downshift on the Product phase when the ticket
-  // is a well-formed manual one — populated AC, source.type=manual, knob on.
+  // AGT-105/107: pick the per-phase model from oteam config based on the
+  // ticket's current state, layering the Haiku downshift on the Product phase
+  // when the ticket is a well-formed manual one.
   const ticketBody = readTicketBody(ticketPath);
   const model = resolveModelForTicket({
     state: ticket.state,
@@ -237,9 +271,9 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
     productDownshift: config.productDownshift,
     models: config.models,
   });
-  const haikuDownshift = model === HAIKU_PRODUCT_MODEL && ticket.state === "triage";
-  // AGT-099: read the global push toggle once and pass an `off` signal into
-  // the system prompt so the spawned agent skips the Phase 4b push step.
+  const haikuDownshift =
+    model === HAIKU_PRODUCT_MODEL && ticket.state === "triage";
+  // AGT-099: the global push toggle. The subagent skips Phase 4b's push when off.
   const pushDisabled = config.push === "off";
   const systemPrompt = composeSystemPrompt(
     ticket.id,
@@ -248,352 +282,82 @@ export async function assignTicket(opts: AssignOptions): Promise<void> {
     pushDisabled,
   );
 
-  // AGT-108: mint a deterministic session UUID + start timestamp before
-  // spawning. `--session-id` pins the per-message JSONL Claude Code writes
-  // to `$CLAUDE_CONFIG_DIR/projects/<encoded-cwd>/<uuid>.jsonl`, which lets
-  // the post-spawn telemetry record sum tokens without guesswork. Phase is
-  // null on `blocked`/`done` states (no role agent runs there) — skip
-  // telemetry plumbing entirely in that case.
+  // Mint a telemetry handle for the orchestrator's teardown record. Phase is
+  // null on `blocked`/`done` states (no role agent) — emit no telemetry then.
   const phase = phaseForState(ticket.state);
-  const telemetry: TelemetryHandle | null =
+  const telemetry =
     phase !== null && getTelemetryEnabled()
       ? {
-          ticketId: ticket.id,
-          phase,
           sessionId: randomUUID(),
+          phase,
+          model,
           startedAt: new Date().toISOString(),
         }
       : null;
 
-  // AGT-017: when the user asked for inline (or the platform can't host kitty
-  // anyway), take the inline path and print a starting line. Failures from
-  // here on are loud (stderr + non-zero exit) — no silent fallback.
-  const wantsKitty = !opts.workInline && isMacOS();
-  if (!wantsKitty) {
-    process.stdout.write(inlineStartLine(ticket.id) + "\n");
-    await runInline(
-      claudePath,
-      ticketPath,
-      resolvedVault.path,
-      systemPrompt,
-      workspace,
-      model,
-      telemetry,
-    );
-    return;
-  }
-
-  const kittyPath = findKittyBinary();
-  if (!kittyPath) {
-    process.stderr.write(
-      "oteam assign: kitty not installed (or not on PATH); pass --inline to run in this terminal\n",
-    );
-    process.exit(1);
-  }
-
-  const monitored = opts.monitoredOrgs ?? readMonitoredOrgsFromEnv();
-  const preferring = preferredKittyContext(ticket.repo, monitored);
-  const socket = findKittySocket(kittyPath, preferring);
-  if (!socket) {
-    process.stderr.write(
-      `oteam assign: no kitty socket reachable (preferring "${preferring}"); pass --inline to run in this terminal\n`,
-    );
-    process.exit(1);
-  }
-
-  const cwd = workspace?.path ?? dirname(ticketPath);
-  const title = `Vault · ${basename(ticketPath)}`;
-  const repoBasename = ticket.repo?.split("/").pop() ?? null;
-  const repoSlug = ticket.repo
-    ? ticket.repo.replace(/\//g, "-").toLowerCase()
-    : null;
-  const envPrefix = envSourcingPrefix(preferring, repoBasename, repoSlug, {
+  return {
+    ticketId: ticket.id,
+    ticketPath,
+    state: ticket.state,
+    phase,
     vaultPath: resolvedVault.path,
-  });
-  // `/assign-ticket <path>` is the literal first prompt the spawned claude
-  // session sees. The slash-command body is installed by
-  // installRolePipelineSlashCommand() above; claude resolves it from the
-  // session's CLAUDE_CONFIG_DIR/commands/ directory.
-  const escapedClaude = shellEscape(claudePath);
-  const escapedTicket = shellEscape(ticketPath);
-  const slashPrompt = `/assign-ticket ${escapedTicket}`;
-  const escapedPrompt = shellEscape(slashPrompt);
-  // System-prompt context (AGT-023 project README + AGT-107 haiku-downshift
-  // hint) gets injected via --append-system-prompt with the payload sourced
-  // from a tmp file. Inlining a multi-KB markdown blob into the shell command
-  // is fragile (backticks, $-subst); `"$(cat tmpfile)"` is safe because the
-  // outer single-quoting protects the substitution and the inner double-
-  // quoting preserves whitespace.
-  const projectFlag = systemPrompt
-    ? ` --append-system-prompt "$(cat '${shellEscape(systemPrompt.tmpFile)}')"`
-    : "";
-  const sessionFlag = telemetry
-    ? ` --session-id '${shellEscape(telemetry.sessionId)}'`
-    : "";
-  // AGT-108: drop the old `exec` here — `exec` would replace the shell with
-  // claude, leaving no way to run the telemetry record after claude exits.
-  // The post-step is `; oteam telemetry record …` (semicolon, not `&&`) so a
-  // non-zero claude exit still records. `EC=$?` captures the original exit
-  // code so we can preserve it both into the record and as the wrapper's
-  // exit status.
-  const claudeCmd = `'${escapedClaude}' --dangerously-skip-permissions --model ${shellEscape(model)}${sessionFlag}${projectFlag} '${escapedPrompt}'`;
-
-  // AGT-049: write claude's exit code to a per-ticket sentinel file when it
-  // exits, so external orchestrators driving multi-ticket epics can watch the
-  // file and know the spawned role-pipeline finished. AC 3: any stale sentinel
-  // from a prior run is removed before spawn so a false-positive can't slip
-  // through. AC 2: the sentinel path is included in the first stdout line.
-  const sentinelPath = sentinelPathForTicket(ticket.id);
-  try {
-    unlinkSync(sentinelPath);
-  } catch {
-    // ENOENT is the normal case (no prior run) — also fine if the path is gone
-    // by the time we check. Any other error here would surface again when the
-    // tail tries to write the file, so swallow uniformly.
-  }
-  const tail = buildKittySpawnTail({
-    sentinelPath,
-    telemetry: telemetry
-      ? {
-          oteamPath: findToolOnPath("oteam") ?? "oteam",
-          ticketId: telemetry.ticketId,
-          phase: telemetry.phase,
-          model,
-          sessionId: telemetry.sessionId,
-          startedAt: telemetry.startedAt,
-        }
-      : null,
-  });
-  const shellCmd = `${envPrefix}${claudeCmd}${tail}`;
-
-  const result = kittyLaunch({
-    socket,
-    title,
-    cwd,
-    shellCmd,
-    kittyPath,
-  });
-  if (result.exitCode !== 0) {
-    throw new Error(
-      `kitty @ launch exited ${result.exitCode}: ${result.stderr || "(no stderr)"}`,
-    );
-  }
-  process.stdout.write(
-    kittySpawnLine(ticket.id, workspace?.path ?? null, sentinelPath) + "\n",
-  );
+    workspacePath: workspace?.path ?? null,
+    originUrl: cloneUri,
+    envFiles: ticket.repo ? resolveEnvFiles(ticket.repo) : [],
+    model,
+    slashCommand: `/assign-ticket ${ticketPath}`,
+    systemPromptFile: systemPrompt?.tmpFile ?? null,
+    haikuDownshift,
+    telemetry,
+  };
 }
 
-/**
- * Deterministic sentinel path for a ticket. External orchestrators rely on
- * this being lower-cased + dot-exit-suffixed; the runner also prints the path
- * verbatim in the first stdout line so callers don't have to re-derive it.
- */
-export function sentinelPathForTicket(ticketId: string): string {
-  return `/tmp/oteam-sentinel-${ticketId.toLowerCase()}.exit`;
-}
-
-export function kittySpawnLine(
-  ticketId: string,
-  workspacePath: string | null,
-  sentinelPath: string | null = null,
-): string {
-  const worktree = workspacePath ? ` (worktree at ${workspacePath})` : "";
-  const sentinel = sentinelPath ? ` (sentinel ${sentinelPath})` : "";
-  return `oteam assign: spawned kitty window for ${ticketId}${worktree}${sentinel}`;
-}
-
-export function inlineStartLine(ticketId: string): string {
-  return `oteam assign: running inline for ${ticketId}; agent starting…`;
-}
-
-interface TelemetryHandle {
-  ticketId: string;
-  phase: string;
-  sessionId: string;
-  startedAt: string;
-}
-
-export interface KittyTailTelemetry {
-  oteamPath: string;
-  ticketId: string;
-  phase: string;
-  model: string;
-  sessionId: string;
-  startedAt: string;
-}
-
-/**
- * Build the shell tail appended after `claude` in the kitty spawn command.
- *
- * The tail captures claude's exit code (`EC=$?`), writes it to the AGT-049
- * sentinel file, optionally records AGT-108 telemetry, then exits the wrapper
- * shell with claude's original exit code. The sentinel write is wrapped in
- * `|| true` so a redirection failure (e.g. /tmp not writable) doesn't mask
- * `$EC` — the wrapper still exits with claude's status and the missing
- * sentinel is the external orchestrator's signal that something went wrong.
- */
-export function buildKittySpawnTail(input: {
-  sentinelPath: string;
-  telemetry: KittyTailTelemetry | null;
-}): string {
-  const sentinelWrite = `printf '%s\\n' "$EC" > '${shellEscape(input.sentinelPath)}' || true`;
-  const parts = [`EC=$?`, sentinelWrite];
-  if (input.telemetry) {
-    const oteam = `'${shellEscape(input.telemetry.oteamPath)}'`;
-    const args = [
-      `--ticket '${shellEscape(input.telemetry.ticketId)}'`,
-      `--phase '${shellEscape(input.telemetry.phase)}'`,
-      `--model '${shellEscape(input.telemetry.model)}'`,
-      `--session '${shellEscape(input.telemetry.sessionId)}'`,
-      `--started-at '${shellEscape(input.telemetry.startedAt)}'`,
-      `--exit-code "$EC"`,
-    ].join(" ");
-    parts.push(`${oteam} telemetry record ${args} >/dev/null 2>&1 || true`);
-  }
-  parts.push(`exit "$EC"`);
-  return `; ${parts.join("; ")}`;
-}
-
-async function runInline(
-  claudePath: string,
-  ticketPath: string,
-  vaultPath: string,
-  systemPrompt: SystemPromptHandle | null,
-  workspace: PreparedWorkspace | null,
-  model: string,
-  telemetry: TelemetryHandle | null,
-): Promise<void> {
-  // Always mint a sessionId so the JSONL file is locatable for AC 3 summary
-  // recovery, regardless of whether telemetry is enabled.
-  const sessionId = telemetry?.sessionId ?? randomUUID();
-
-  const args: string[] = [
-    "--dangerously-skip-permissions",
-    "--model", model,
-    "--session-id", sessionId,
+/** Human-readable summary printed above the machine block. */
+export function assignmentSummary(ctx: AssignmentContext): string {
+  const lines = [
+    `oteam assign: prepared ${ctx.ticketId} (${ctx.phase ?? ctx.state} phase)`,
   ];
-  if (systemPrompt) {
-    // Inline path uses spawn's argv directly — no shell escaping needed,
-    // and we can pass the prompt content rather than reading it from the tmp
-    // file. Tmp file is still written for parity with the kitty path (and so
-    // failure modes match across the two spawn shapes).
-    args.push("--append-system-prompt", systemPrompt.content);
-  }
-  args.push(`/assign-ticket ${ticketPath}`);
-
-  // Resolve symlinks so the encoded cwd matches the path Claude Code uses when
-  // writing session JSONL. On macOS /tmp is a symlink to /private/tmp; without
-  // this resolution, findSessionFile encodes "-tmp-..." while Claude Code
-  // stores the file under "-private-tmp-...", causing existsSync to miss it and
-  // recordPhase to silently fall back to tokens:{} / outcome:"unknown".
-  const rawCwd = workspace?.path ?? process.cwd();
-  const cwd = (() => { try { return realpathSync(rawCwd); } catch { return rawCwd; } })();
-
-  // AGT-236: use async spawn with detached:true so claude becomes the leader
-  // of a new process group. After claude itself exits (exit event), we can
-  // enumerate and kill any descendant subprocesses that are still alive via
-  // pgrep -g <pgid>, giving them a 30 s grace period first.
-  const child = spawn(claudePath, args, {
-    stdio: "inherit",
-    cwd: workspace?.path,
-    env: { ...process.env, PRODUCT_VAULT_PATH: vaultPath },
-    detached: true,
-  });
-
-  if (child.pid == null) {
-    throw new Error(`oteam assign: failed to spawn claude — pid is null`);
-  }
-  const pgid = child.pid;
-
-  const exitCode = await new Promise<number>((resolve) => {
-    child.on("exit", (code) => resolve(code ?? 0));
-  });
-
-  // Grace period: wait up to 30 s for descendant processes in claude's group
-  // to exit on their own, then forcibly kill any survivors (AC 1 + AC 2).
-  const killed = await killGroupAfterGrace(pgid, 30_000);
-  if (killed.length > 0) {
-    process.stderr.write(
-      `oteam assign: killed ${killed.length} subprocess(es) that outlived the agent turn: PIDs ${killed.join(", ")}\n`,
-    );
-    // AC 3: read the last assistant turn from the session JSONL and print it
-    // so the operator can see the completion summary even if stdout was wedged.
-    const claudeConfigDir =
-      (process.env["CLAUDE_CONFIG_DIR"] ?? "").length > 0
-        ? process.env["CLAUDE_CONFIG_DIR"]!
-        : join(homedir(), ".claude");
-    const sessionPath = findSessionFile(claudeConfigDir, cwd, sessionId);
-    const summary = lastAssistantText(sessionPath);
-    if (summary) {
-      process.stdout.write(
-        "\n--- Last agent output (recovered from session JSONL) ---\n" +
-          summary +
-          "\n--- end recovered output ---\n",
-      );
-    }
-  }
-
-  if (telemetry) {
-    // AGT-108: best-effort per AC #4 — recordPhase already wraps its own
-    // body in try/catch and writes any failure to stderr.
-    recordPhase({
-      ticket: telemetry.ticketId,
-      phase: telemetry.phase,
-      model,
-      sessionId: telemetry.sessionId,
-      startedAt: telemetry.startedAt,
-      exitCode,
-      cwd,
-    });
-  }
-  if (exitCode !== 0) process.exit(exitCode);
+  if (ctx.workspacePath) lines.push(`  worktree: ${ctx.workspacePath}`);
+  lines.push(`  model:    ${ctx.model}`);
+  lines.push(
+    `  next:     dispatch a subagent to run \`${ctx.slashCommand}\`` +
+      (ctx.workspacePath ? ` in the worktree above` : ``),
+  );
+  return lines.join("\n");
 }
 
 /**
- * After a spawned process group leader exits, poll for surviving members of
- * its process group and kill them with SIGKILL once the grace period expires.
- * Returns the PIDs that were killed (empty when the group cleared on its own).
- *
- * Exported for unit testing — the injectable `opts.listFn` and `opts.killFn`
- * replace the OS calls so tests don't need real processes.
+ * The machine-readable contract for the orchestrator: a fenced
+ * ```oteam:assignment``` block wrapping the context as JSON. Fenced + tagged so
+ * an in-session parent can locate and parse it unambiguously from the output.
  */
-export async function killGroupAfterGrace(
-  pgid: number,
-  graceMs: number,
-  opts: {
-    listFn?: (pgid: number) => number[];
-    killFn?: (pid: number) => void;
-    pollMs?: number;
-  } = {},
-): Promise<number[]> {
-  const listFn = opts.listFn ?? listProcessGroup;
-  const killFn = opts.killFn ?? ((pid) => { try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ } });
-  const pollMs = opts.pollMs ?? 500;
-  const deadline = Date.now() + graceMs;
-
-  while (Date.now() < deadline) {
-    const pids = listFn(pgid);
-    if (pids.length === 0) return [];
-    await new Promise<void>((r) => setTimeout(r, pollMs));
-  }
-
-  const survivors = listFn(pgid);
-  for (const pid of survivors) killFn(pid);
-  return survivors;
+export function assignmentBlock(ctx: AssignmentContext): string {
+  return ["```oteam:assignment", JSON.stringify(ctx, null, 2), "```"].join("\n");
 }
 
-function listProcessGroup(pgid: number): number[] {
-  // macOS: pgrep -g <pgid>; Linux fallback: ps -o pid= -g <pgid>
-  let r = spawnSync("pgrep", ["-g", String(pgid)], { encoding: "utf8" });
-  if (r.status !== 0 || !r.stdout?.trim()) {
-    r = spawnSync("ps", ["-o", "pid=", "-g", String(pgid)], { encoding: "utf8" });
+/**
+ * Candidate env files the subagent should source before build/install/test,
+ * mirroring what the kitty `envSourcingPrefix` sourced in the spawn era:
+ *   1. the primary checkout's `.env` / `.env.local` (`~/Development/<basename>`)
+ *   2. the per-repo secrets file `~/.open-team/env-<owner>-<name>` (lowercased)
+ * The personal/work split (`env-<personal|work>`) is dropped — it was keyed off
+ * the removed kitty/OTEAM_MONITORED_ORGS routing. Paths are validated against a
+ * conservative charset so they're safe for the subagent to `. ` directly.
+ */
+export function resolveEnvFiles(repoSlug: string): string[] {
+  const home = homedir();
+  const files: string[] = [];
+  const slash = repoSlug.lastIndexOf("/");
+  const base = slash >= 0 ? repoSlug.slice(slash + 1) : repoSlug;
+  if (/^[A-Za-z0-9._-]+$/.test(base)) {
+    files.push(join(home, "Development", base, ".env"));
+    files.push(join(home, "Development", base, ".env.local"));
   }
-  if (r.status !== 0 || !r.stdout) return [];
-  return (r.stdout as string)
-    .trim()
-    .split("\n")
-    .map((s) => parseInt(s.trim(), 10))
-    .filter((n) => Number.isFinite(n) && n > 0);
+  const ownerName = repoSlug.replace(/\//g, "-").toLowerCase();
+  if (/^[a-z0-9._-]+$/.test(ownerName)) {
+    files.push(join(home, ".open-team", `env-${ownerName}`));
+  }
+  return files;
 }
 
 // Terminal states have no remaining work to do in the workspace; their dirs
@@ -607,8 +371,8 @@ function collectActiveTicketIds(vaultPath: string): Set<string> {
       if (!TERMINAL_STATES.has(t.state)) ids.add(t.id.toLowerCase());
     }
   } catch {
-    // Best-effort — a vault read failure should not block the spawn. The
-    // GC sweep skips when the active set is empty/missing.
+    // Best-effort — a workspace read failure should not block prep. The GC
+    // sweep skips when the active set is empty/missing.
   }
   return ids;
 }
@@ -616,7 +380,7 @@ function collectActiveTicketIds(vaultPath: string): Set<string> {
 interface SystemPromptHandle {
   /** Absolute path to the tmp file containing the prompt payload. */
   tmpFile: string;
-  /** The same payload as a string (used by the inline path). */
+  /** The same payload as a string. */
   content: string;
 }
 
@@ -638,16 +402,8 @@ function loadProjectContext(
 
 /**
  * Combine the project-context payload (AGT-023), the AGT-107 haiku-downshift
- * hint, and the AGT-099 push-disabled hint into a single
- * `--append-system-prompt` payload. Returns null when none are active so
- * the spawn skips the flag entirely.
- *
- * The haiku-downshift hint tells the Product agent to mark its comment
- * header as `(haiku-downshift)`. Putting the signal here (single source of
- * truth) keeps the agent from re-running the heuristic itself. The
- * push-disabled hint tells the Engineering agent to skip the Phase 4b
- * outbound push and print a status line instead, so the agent does not
- * have to read `~/.open-team/config.json` itself (AC #3).
+ * hint, and the AGT-099 push-disabled hint into a single system-prompt payload,
+ * written to a tmp file the subagent can `cat`. Returns null when none active.
  */
 function composeSystemPrompt(
   ticketId: string,
@@ -661,8 +417,8 @@ function composeSystemPrompt(
   if (pushDisabled) parts.push(pushDisabledPromptHint());
   if (parts.length === 0) return null;
   const content = parts.join("\n\n");
-  // Tmp file is reused per ticket so re-spawns overwrite cleanly and stale
-  // files don't accumulate. /tmp is OS-swept on reboot.
+  // Tmp file is reused per ticket so re-runs overwrite cleanly and stale files
+  // don't accumulate. /tmp is OS-swept on reboot.
   const safeId = ticketId.replace(/[^a-zA-Z0-9._-]/g, "_");
   const tmpFile = join(tmpdir(), `oteam-prompt-${safeId}.md`);
   writeFileSync(tmpFile, content, "utf8");
@@ -673,7 +429,7 @@ function haikuDownshiftPromptHint(): string {
   return [
     "# Product agent: haiku-downshift heuristic active",
     "",
-    "AGT-107: this ticket is a well-formed manual ticket (source.type=manual + populated `## Acceptance Criteria`), so the runner spawned you on Haiku 4.5 instead of the configured Product model. The heuristic exists to handle structural-cleanup cases cheaply; full synthesis still belongs on the configured Product model.",
+    "AGT-107: this ticket is a well-formed manual ticket (source.type=manual + populated `## Acceptance Criteria`), so the runner picked Haiku 4.5 instead of the configured Product model. The heuristic exists to handle structural-cleanup cases cheaply; full synthesis still belongs on the configured Product model.",
     "",
     "When you advance the ticket, write the comment header as:",
     "",
@@ -710,19 +466,6 @@ function readTicketBody(path: string): string {
   } catch {
     return "";
   }
-}
-
-function findToolOnPath(name: string): string | null {
-  const r = spawnSync("/usr/bin/env", ["which", name], { encoding: "utf8" });
-  if (r.status !== 0) return null;
-  const path = (r.stdout || "").trim();
-  return path.length > 0 ? path : null;
-}
-
-function readMonitoredOrgsFromEnv(): string[] {
-  const raw = process.env.OTEAM_MONITORED_ORGS;
-  if (!raw) return [];
-  return raw.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
 /**
