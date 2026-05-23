@@ -10,7 +10,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup && cp src/role-pipeline/assign-ticket.md dist/assign-ticket.md && cp src/role-pipeline/implement-project.md dist/implement-project.md",
+    "build": "tsup && cp src/role-pipeline/assign-ticket.md dist/assign-ticket.md && cp src/role-pipeline/implement-project.md dist/implement-project.md && cp src/role-pipeline/refine.md dist/refine.md",
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --test --import tsx 'tests/**/*.test.ts'",

@@ -6,9 +6,17 @@ import { fileURLToPath } from "node:url";
 // Source markdown files that ship with the npm package. tsup copies them to
 // dist/ next to index.js (see package.json `build` script).
 const moduleDir = dirname(fileURLToPath(import.meta.url));
-const BUNDLED_COMMANDS: ReadonlyArray<{ src: string; dest: string }> = [
+
+/**
+ * The role-pipeline slash-command bodies bundled with the package, by dest
+ * filename. Exported so tests can assert the registered set without re-deriving
+ * it. Each entry's `dest` must also be copied into `dist/` by the
+ * `package.json` `build` script — keep the two lists in sync.
+ */
+export const BUNDLED_COMMANDS: ReadonlyArray<{ src: string; dest: string }> = [
   { src: join(moduleDir, "assign-ticket.md"), dest: "assign-ticket.md" },
   { src: join(moduleDir, "implement-project.md"), dest: "implement-project.md" },
+  { src: join(moduleDir, "refine.md"), dest: "refine.md" },
 ];
 
 /**
@@ -19,7 +27,7 @@ const BUNDLED_COMMANDS: ReadonlyArray<{ src: string; dest: string }> = [
  * `~/.claude-work`), and each needs a copy or the commands are "Unknown
  * command" in that profile.
  *
- * Installs: /assign-ticket, /implement-project.
+ * Installs: /assign-ticket, /implement-project, /refine.
  *
  * Idempotent: skips writes when contents already match. Best-effort: a write
  * failure on one target doesn't stop the others. No-op for any command whose
