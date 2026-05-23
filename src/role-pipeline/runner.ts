@@ -77,6 +77,20 @@ export interface AssignmentContext {
   /** Resolved clone URI of the prepared worktree, or null when none. */
   originUrl: string | null;
   /**
+   * Base SHA the worktree was cloned from (`origin/main` HEAD at clone time),
+   * or null for workspace-only tickets / when the SHA couldn't be captured.
+   * The pre-review freshness guard in `assign-ticket.md` compares this against
+   * current `origin/main` and rebases if it has advanced — closing the
+   * clone→merge staleness window.
+   */
+  baseSha: string | null;
+  /**
+   * Absolute path of the file the base SHA was written to (sibling to the
+   * worktree's `repo/`), or null when no SHA was captured. The freshness guard
+   * reads this file deterministically.
+   */
+  baseShaFile: string | null;
+  /**
    * Env files the subagent should source before build/install/test, in order
    * (guard each with `[ -r ]` — some, like the per-repo secrets file, may not
    * exist until the user supplies missing tokens mid-run). Empty for
@@ -303,6 +317,8 @@ export async function prepareAssignment(
     vaultPath: resolvedVault.path,
     workspacePath: workspace?.path ?? null,
     originUrl: cloneUri,
+    baseSha: workspace?.baseSha ?? null,
+    baseShaFile: workspace?.baseShaFile ?? null,
     envFiles: ticket.repo ? resolveEnvFiles(ticket.repo) : [],
     model,
     slashCommand: `/assign-ticket ${ticketPath}`,

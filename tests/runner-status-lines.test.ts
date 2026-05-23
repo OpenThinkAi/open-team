@@ -18,6 +18,8 @@ function ctx(overrides: Partial<AssignmentContext> = {}): AssignmentContext {
     vaultPath: "/ws",
     workspacePath: "/tmp/open-team-issues/agt-013/repo",
     originUrl: "ssh://git@stamp.example/srv/git/foo.git",
+    baseSha: "0123456789abcdef0123456789abcdef01234567",
+    baseShaFile: "/tmp/open-team-issues/agt-013/base-sha",
     envFiles: [],
     model: "claude-opus-4-7",
     slashCommand: "/assign-ticket /ws/tickets/refined/AGT-013-foo.md",

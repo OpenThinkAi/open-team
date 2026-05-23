@@ -71,6 +71,8 @@ If your appended system context flags the **AGT-107 haiku-downshift heuristic** 
 
 Cost trade: a fresh clone per assign adds a few seconds vs. the older `git worktree add` fast path. That's an intentional trade for AC-grade isolation — the agent worktree shares no `.git/objects` and no remotes with your primary, and removing or renaming any remote inside the worktree cannot leak back to your daily flow.
 
+**Clone→merge staleness window.** The worktree is fresh *at clone time*, but a role can run for many minutes; `origin/main` may advance underneath it before you reach `stamp review`/`stamp merge`. To close that window, `oteam assign` recorded the clone-time base SHA (the assignment block's `baseShaFile` field). The **Pre-review freshness guard** in Phase 4b Step 5 reads it, re-fetches `origin`, and rebases onto current `main` if it advanced — so a metered review is never spent on a stale base and a merge never fails non-FF for staleness alone. You don't act on the recorded SHA here in Phase 3; just know it's captured for Step 5.
+
 If you invoked `/assign-ticket` by hand (no `oteam assign` wrapper) and the workspace doesn't exist yet, set it up the same way the runner would:
 
 ```sh
@@ -272,9 +274,48 @@ push disabled by oteam config; merge commit is local at <sha>; run 'git push ori
 
 substituting `<sha>` with `git rev-parse HEAD` after the merge (5a/5c) or after the last feature commit (5b). In 5b/5c, also skip `gh pr create` and leave `linked-pr:` empty — there is no pushed branch for the PR to reference. Note the held push in the wrap-up comment. Step 6 (stamp retro routing) still runs because it does not depend on the push.
 
+**Pre-review freshness guard (AGT issue #14) — run this BEFORE the first `stamp review` in 5a or 5c.** `oteam assign` cloned this worktree from `origin` at clone time, but a role can run for many minutes; `origin/main` may have advanced *underneath the worktree* since (a concurrent operator, another session, or a sibling ticket in the same `/implement-project` wave landing first). Reviewing/merging against that stale base wastes a metered review and gets the eventual push rejected non-fast-forward. This guard closes the clone→merge window: re-fetch `origin`, and if `$BASE_BRANCH` advanced past the SHA the worktree was cloned from, rebase the feature branch onto the fresh base so the review runs against current `main`. This complements the `/implement-project` orchestrator, which already cuts each wave's worktrees from post-merge main (covering cross-wave dependencies) — the guard is the per-ticket backstop for concurrent external pushes and within-wave races. Skip this guard for `MODE=plain` (no `stamp review`, and a fresh feature-branch push can't be non-FF).
+
+`oteam assign` recorded the clone-time base SHA at the path in the `oteam:assignment` block's `baseShaFile` field (a file sibling to the worktree's `repo/`, containing one line: `origin/main`'s HEAD at clone time). Read it and compare against the freshly fetched base:
+
+```sh
+# RECORDED_BASE_SHA_FILE = the assignment block's `baseShaFile` (substitute the
+# literal path). It may be absent/empty if SHA capture was skipped — then the
+# guard degrades to "always rebase onto fresh base", which is still safe.
+RECORDED_BASE=""
+if [ -n "$RECORDED_BASE_SHA_FILE" ] && [ -r "$RECORDED_BASE_SHA_FILE" ]; then
+    RECORDED_BASE=$(tr -d '[:space:]' < "$RECORDED_BASE_SHA_FILE")
+fi
+
+git fetch origin "$BASE_BRANCH"
+FRESH_BASE=$(git rev-parse "origin/$BASE_BRANCH")
+
+if [ -n "$RECORDED_BASE" ] && [ "$RECORDED_BASE" = "$FRESH_BASE" ]; then
+    echo "freshness guard: origin/$BASE_BRANCH unchanged since clone ($FRESH_BASE) — no rebase needed"
+else
+    echo "freshness guard: origin/$BASE_BRANCH advanced (clone=$RECORDED_BASE now=$FRESH_BASE) — rebasing $FEATURE_BRANCH onto fresh base"
+    # Refresh the local base branch ref to the fetched tip, then rebase the
+    # feature branch onto it so the review/merge runs against current main.
+    git checkout "$BASE_BRANCH"
+    git reset --hard "origin/$BASE_BRANCH"
+    git checkout "$FEATURE_BRANCH"
+    if ! git rebase "$BASE_BRANCH"; then
+        # CONFLICT: never auto-resolve. Abort the rebase to leave the worktree
+        # in a clean, inspectable state, then hand off to the human.
+        git rebase --abort
+        echo "🛑 BLOCKED — Pre-review freshness rebase hit conflicts; surfacing to human (did NOT auto-resolve)"
+        # STOP here. Do not run stamp review/merge. The human resolves the
+        # rebase (or re-runs assign once main is reconciled).
+        exit 1
+    fi
+fi
+```
+
+**On rebase conflict, STOP and hand off — never attempt automatic conflict resolution.** Print the `🛑 BLOCKED` banner above, surface the conflicting paths to the human, and do not proceed to `stamp review`/`stamp merge`. (In `local-stamp` mode, `$FEATURE_BRANCH` here is the branch carrying your commits — i.e. `$WORK_BRANCH` if you cut one in Step 3; rebase that branch and leave the eventual PR base, the original `$FEATURE_BRANCH`, to be re-derived after the rebase. If unsure, rebase the branch your Step-4 commits are on.) After a clean rebase (or a no-op when the base was unchanged), continue into the `stamp review` block below — it now runs against the fresh base.
+
 #### 5a — Stamp-protected repo
 
-Run review and merge. Capture the review's combined output (stdout + stderr) to a known tempfile so Step 6 can route any `STAMP-RETRO` candidates the reviewers emit. Re-run the entire `tee` block on every round of the 5-round iteration — `$STAMP_REVIEW_OUT` is reassigned to a fresh `mktemp` each round, so Step 6 reads only the last (gate-opening) run; prior tempfiles are left behind for the OS to reap.
+**Run the Pre-review freshness guard above first** (it rebases onto current `origin/$BASE_BRANCH` if it advanced since clone, or STOPs on conflict). Then run review and merge. Capture the review's combined output (stdout + stderr) to a known tempfile so Step 6 can route any `STAMP-RETRO` candidates the reviewers emit. Re-run the entire `tee` block on every round of the 5-round iteration — `$STAMP_REVIEW_OUT` is reassigned to a fresh `mktemp` each round, so Step 6 reads only the last (gate-opening) run; prior tempfiles are left behind for the OS to reap.
 
 ```sh
 STAMP_REVIEW_OUT=$(mktemp -t stamp-review.XXXXXX)
@@ -310,7 +351,7 @@ Capture the PR URL into `linked-pr:`. Human merges through GitHub PR review.
 
 #### 5c — Local-stamp repo (`.stamp/` present, GitHub origin)
 
-Run review on `$WORK_BRANCH` against `$FEATURE_BRANCH` (the eventual PR base). Capture the review's combined output (stdout + stderr) to a known tempfile so Step 6 can route any `STAMP-RETRO` candidates the reviewers emit. Re-run the entire `tee` block on every round of the 5-round iteration — `$STAMP_REVIEW_OUT` is reassigned to a fresh `mktemp` each round, so Step 6 reads only the last (gate-opening) run; prior tempfiles are left behind for the OS to reap.
+**Run the Pre-review freshness guard above first** (rebase `$WORK_BRANCH` onto current `origin/$BASE_BRANCH` if it advanced since clone, or STOP on conflict). Then run review on `$WORK_BRANCH` against `$FEATURE_BRANCH` (the eventual PR base). Capture the review's combined output (stdout + stderr) to a known tempfile so Step 6 can route any `STAMP-RETRO` candidates the reviewers emit. Re-run the entire `tee` block on every round of the 5-round iteration — `$STAMP_REVIEW_OUT` is reassigned to a fresh `mktemp` each round, so Step 6 reads only the last (gate-opening) run; prior tempfiles are left behind for the OS to reap.
 
 ```sh
 STAMP_REVIEW_OUT=$(mktemp -t stamp-review.XXXXXX)
