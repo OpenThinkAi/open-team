@@ -34,6 +34,7 @@ export function renderTicket(input: RenderInput): string {
     `updated: ${todayISO}`,
     `project: ${input.project ?? ""}`,
     `repo: ${payload.repo ?? ""}`,
+    "blocked-by: []",
     `linked-github: ${linkedGitHub}`,
     `linked-pr: ${linkedPR}`,
     "priority: medium",
@@ -130,6 +131,8 @@ export interface ManualRenderInput {
   fetchedAtISO: string;
   team: string;
   project: string | null;
+  repo: string | null;
+  blockedBy: string[];
   priority: string;
   labels: string[];
 }
@@ -138,6 +141,8 @@ export function renderManualTicket(input: ManualRenderInput): string {
   const safeTitle = input.title.replace(/"/g, '\\"');
   const labels =
     input.labels.length === 0 ? "[]" : `[${input.labels.join(", ")}]`;
+  const blockedBy =
+    input.blockedBy.length === 0 ? "[]" : `[${input.blockedBy.join(", ")}]`;
 
   const frontmatter = [
     "---",
@@ -148,7 +153,8 @@ export function renderManualTicket(input: ManualRenderInput): string {
     `created: ${input.todayISO}`,
     `updated: ${input.todayISO}`,
     `project: ${input.project ?? ""}`,
-    "repo: ",
+    `repo: ${input.repo ?? ""}`,
+    `blocked-by: ${blockedBy}`,
     "linked-github: ",
     "linked-pr: ",
     `priority: ${input.priority}`,

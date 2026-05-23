@@ -1,8 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -14,6 +16,7 @@ import {
   projectFrontmatterTemplate,
   readProject,
 } from "../src/lib/projects.ts";
+import { runInit } from "../src/commands/project.ts";
 
 const SAMPLE_README = `---
 id: think-cli-v2
@@ -145,6 +148,59 @@ body
       const project = readProject(vault, "solo")!;
       const out = formatProjectContextForPrompt(project);
       assert.doesNotMatch(out, /Additional design docs/);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe("project init --from-doc", () => {
+  it("scaffolds README.md without a sibling when --from-doc is omitted", () => {
+    const { vault, cleanup } = makeVault();
+    try {
+      runInit("plain", { vault, edit: false });
+      const project = readProject(vault, "plain");
+      assert.ok(project);
+      assert.ok(existsSync(project.readmePath));
+      assert.deepEqual(project.siblings, []);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("seeds the design doc as a discoverable sibling", () => {
+    const { vault, cleanup } = makeVault();
+    try {
+      const docPath = join(vault, "incoming-design.md");
+      writeFileSync(docPath, "# Design\n\nThe plan.\n");
+
+      runInit("seeded", { vault, fromDoc: docPath, edit: false });
+
+      const project = readProject(vault, "seeded");
+      assert.ok(project);
+      assert.equal(project.siblings.length, 1);
+      const sibling = project.siblings[0]!;
+      assert.ok(sibling.endsWith("incoming-design.md"), sibling);
+      assert.match(readFileSync(sibling, "utf8"), /The plan\./);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("renames a README.md source to design.md to avoid colliding with the scaffold", () => {
+    const { vault, cleanup } = makeVault();
+    try {
+      const docPath = join(vault, "README.md");
+      writeFileSync(docPath, "# External design doc\n");
+
+      runInit("collide", { vault, fromDoc: docPath, edit: false });
+
+      const project = readProject(vault, "collide");
+      assert.ok(project);
+      assert.equal(project.siblings.length, 1);
+      assert.ok(project.siblings[0]!.endsWith("design.md"), project.siblings[0]);
+      // Scaffolded README must be the template, not the source doc.
+      assert.match(readFileSync(project.readmePath, "utf8"), /^id: collide$/m);
     } finally {
       cleanup();
     }

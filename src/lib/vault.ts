@@ -213,6 +213,7 @@ export function parseTicket(path: string): VaultTicket | null {
     updatedAt: isNaN(updated.getTime()) ? created : updated,
     project: nonEmpty(frontmatter.project),
     repo: nonEmpty(frontmatter.repo),
+    blockedBy: parseLabels(frontmatter["blocked-by"] ?? "[]"),
     linkedGitHub: nonEmpty(frontmatter["linked-github"]),
     linkedPR: nonEmpty(frontmatter["linked-pr"]),
     priority: nonEmpty(frontmatter.priority),
