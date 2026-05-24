@@ -67,9 +67,9 @@ If your appended system context flags the **AGT-107 haiku-downshift heuristic** 
 
 ## Phase 3 — Engineering agent (state: refined → spike phase)
 
-**Step 0 — Workspace is already prepared.** When `oteam assign` prepared the workspace for a repo-bound ticket, it already cloned `/tmp/open-team-issues/<ticket-id-lowercased>/repo` from the URI recorded for the repo in `~/.open-team/config.json` and set your cwd to it. Confirm with `pwd` and `git remote -v`; you should see exactly one remote, `origin`, pointing at the URI recorded for this repo.
+**Step 0 — Workspace is already prepared.** When `oteam assign` prepared the workspace for a repo-bound ticket, it either cloned `/tmp/open-team-issues/<ticket-id-lowercased>/repo` fresh **or reused an existing worktree** that carried unpushed commits from a prior phase (see `reused` in the `oteam:assignment` block). Confirm with `pwd` and `git remote -v`; you should see exactly one remote, `origin`, pointing at the URI recorded for this repo. If `reused: true`, the feature branch from the prior phase is already present — the branch-handling in Phase 4b Step 3 uses `git rev-parse --verify` to check out the existing branch rather than re-cutting it with `git checkout -b`.
 
-Cost trade: a fresh clone per assign adds a few seconds vs. the older `git worktree add` fast path. That's an intentional trade for AC-grade isolation — the agent worktree shares no `.git/objects` and no remotes with your primary, and removing or renaming any remote inside the worktree cannot leak back to your daily flow.
+Cost trade: a fresh clone per assign adds a few seconds vs. the older `git worktree add` fast path. That's an intentional trade for AC-grade isolation — the agent worktree shares no `.git/objects` and no remotes with your primary, and removing or renaming any remote inside the worktree cannot leak back to your daily flow. On stamp-gated repos, the reuse path preserves the impl phase's feature branch across the impl → QA → merge hand-offs (where pushing the feature branch to origin is rejected by the pre-receive hook).
 
 **Clone→merge staleness window.** The worktree is fresh *at clone time*, but a role can run for many minutes; `origin/main` may advance underneath it before you reach `stamp review`/`stamp merge`. To close that window, `oteam assign` recorded the clone-time base SHA (the assignment block's `baseShaFile` field). The **Pre-review freshness guard** in Phase 4b Step 5 reads it, re-fetches `origin`, and rebases onto current `main` if it advanced — so a metered review is never spent on a stale base and a merge never fails non-FF for staleness alone. You don't act on the recorded SHA here in Phase 3; just know it's captured for Step 5.
 
@@ -199,7 +199,9 @@ fi
 
 If `MODE` doesn't match what you expected from `git remote -v` and the visible `.stamp/` state, stop and surface — the worktree was cloned from an unexpected remote or `.stamp/` was added/removed mid-flight.
 
-**3. Determine base branch + cut feature branch.**
+**3. Determine base branch + cut (or check out) feature branch.**
+
+The `oteam:assignment` block's `reused` field tells you whether `oteam assign` preserved an existing worktree from a prior phase (e.g. the impl phase left commits on `agt/<id>` that a stamp-gated pre-receive hook would reject on push, so the worktree was kept). When `reused: true`, the feature branch already exists — `git checkout -b` would fail. Use the guard below so both paths work correctly.
 
 ```sh
 DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remotes/origin/@@')
@@ -209,9 +211,16 @@ DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remote
 # until then, fall back to DEFAULT_BRANCH.)
 BASE_BRANCH="$DEFAULT_BRANCH"
 git fetch origin "$BASE_BRANCH":"$BASE_BRANCH" 2>/dev/null || git fetch origin "$BASE_BRANCH"
-git checkout "$BASE_BRANCH"
 FEATURE_BRANCH="agt/$(echo "$TICKET_ID" | tr '[:upper:]' '[:lower:]')"
-git checkout -b "$FEATURE_BRANCH"
+
+# Check out the existing branch if present (reused worktree), or create it.
+# `git checkout -b` on an existing branch errors; the guard handles both paths.
+if git rev-parse --verify "$FEATURE_BRANCH" >/dev/null 2>&1; then
+    git checkout "$FEATURE_BRANCH"
+else
+    git checkout "$BASE_BRANCH"
+    git checkout -b "$FEATURE_BRANCH"
+fi
 
 # Local-stamp only: cut a work branch off the feature branch so commits in
 # Step 4 land on $WORK_BRANCH and Step 5c can stamp-merge $WORK_BRANCH into
@@ -219,7 +228,12 @@ git checkout -b "$FEATURE_BRANCH"
 # PR head. In other modes WORK_BRANCH == FEATURE_BRANCH (no extra checkout).
 if [ "$MODE" = "local-stamp" ]; then
     WORK_BRANCH="${FEATURE_BRANCH}-work"
-    git checkout -b "$WORK_BRANCH"
+    # Same guard: reuse the work branch if it was carried over.
+    if git rev-parse --verify "$WORK_BRANCH" >/dev/null 2>&1; then
+        git checkout "$WORK_BRANCH"
+    else
+        git checkout -b "$WORK_BRANCH"
+    fi
 else
     WORK_BRANCH="$FEATURE_BRANCH"
 fi

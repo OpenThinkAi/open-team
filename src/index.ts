@@ -84,15 +84,20 @@ program
   )
   .option("-w, --workspace <name-or-path>", "Use a specific registered workspace")
   .addOption(new Option("--vault <name-or-path>").hideHelp())
+  .option(
+    "--fresh",
+    "Force a fresh re-clone of the worktree, discarding any unpushed WIP",
+  )
   .action(
     async (
       ticketPath: string,
-      opts: { inline?: boolean; workspace?: string; vault?: string },
+      opts: { inline?: boolean; workspace?: string; vault?: string; fresh?: boolean },
     ) => {
       // `--inline` is accepted-but-ignored for transitional compatibility.
       await assignTicket({
         ticketPath,
         vault: opts.workspace ?? opts.vault,
+        fresh: opts.fresh,
       });
     },
   );
