@@ -16,6 +16,10 @@ import {
   prepareAgentWorkspace,
   type CloneResult,
   type CloneRunner,
+  type FetchResult,
+  type FetchRunner,
+  type InspectResult,
+  type InspectRunner,
   type RevParseResult,
   type RevParseRunner,
 } from "../src/lib/workspace.ts";
@@ -45,6 +49,36 @@ function recordCloneRunner(
 
 function fakeRevParseRunner(result: RevParseResult): RevParseRunner {
   return () => result;
+}
+
+interface FakeFetchCall {
+  repoDir: string;
+}
+
+function recordFetchRunner(
+  result: FetchResult,
+  calls: FakeFetchCall[] = [],
+): FetchRunner {
+  return (repoDir) => {
+    calls.push({ repoDir });
+    return result;
+  };
+}
+
+function fakeInspectRunner(result: InspectResult): InspectRunner {
+  return () => result;
+}
+
+const CLEAN_INSPECT: InspectResult = {
+  gitDir: true,
+  inProgress: false,
+  aheadCount: 0,
+  status: 0,
+  stderr: "",
+};
+
+function aheadInspect(n: number): InspectResult {
+  return { gitDir: true, inProgress: false, aheadCount: n, status: 0, stderr: "" };
 }
 
 const FAKE_BASE_SHA = "0123456789abcdef0123456789abcdef01234567";
@@ -127,7 +161,7 @@ describe("prepareAgentWorkspace", () => {
     assert.match((caught as Error).message, /fatal: repository not found/);
   });
 
-  it("rm -rf's a prior workspace before re-cloning (hermetic re-runs)", () => {
+  it("rm -rf's a prior workspace before re-cloning when clean (aheadCount 0)", () => {
     fakeHome = withFakeHome();
     const ticketDir = join(rootDir, "agt-005");
     mkdirSync(join(ticketDir, "repo"), { recursive: true });
@@ -138,9 +172,11 @@ describe("prepareAgentWorkspace", () => {
       repoSlug: "OpenThinkAi/foo",
       cloneUri: STAMP_URI,
       cloneRunner: recordCloneRunner({ status: 0, stderr: "" }),
+      inspectRunner: fakeInspectRunner(CLEAN_INSPECT),
       rootDir,
     });
     assert.equal(out.path, join(ticketDir, "repo"));
+    assert.equal(out.reused, false, "clean re-clone must return reused: false");
     assert.equal(
       existsSync(join(ticketDir, "repo", "stale.txt")),
       false,
@@ -180,6 +216,9 @@ describe("prepareAgentWorkspace", () => {
       repoSlug: "OpenThinkAi/x",
       cloneUri: STAMP_URI,
       cloneRunner: recordCloneRunner({ status: 0, stderr: "" }),
+      // The pre-created dir has no .git/; supply a clean inspectRunner so the
+      // test exercises the GC sweep path (clean → re-clone) deterministically.
+      inspectRunner: fakeInspectRunner(CLEAN_INSPECT),
       activeTicketIds: new Set(["agt-007"]),
       rootDir,
     });
@@ -277,6 +316,223 @@ describe("prepareAgentWorkspace", () => {
       existsSync(join(rootDir, "agt-017", BASE_SHA_FILENAME)),
       false,
     );
+  });
+
+  it("returns reused: false on a plain fresh clone", () => {
+    fakeHome = withFakeHome();
+    const out = prepareAgentWorkspace({
+      ticketId: "AGT-018",
+      repoSlug: "OpenThinkAi/open-team",
+      cloneUri: STAMP_URI,
+      cloneRunner: recordCloneRunner({ status: 0, stderr: "" }),
+      rootDir,
+    });
+    assert.equal(out.reused, false);
+  });
+
+  // ── Reuse path (AC 1, AC 4, AC 5) ────────────────────────────────────────
+
+  it("reuses existing worktree when aheadCount > 0 (does NOT call cloneRunner)", () => {
+    fakeHome = withFakeHome();
+    const ticketDir = join(rootDir, "agt-020");
+    // Pre-create the repo dir with a sentinel WIP file.
+    mkdirSync(join(ticketDir, "repo"), { recursive: true });
+    writeFileSync(join(ticketDir, "repo", "wip.ts"), "// work in progress\n");
+
+    const cloneCalls: FakeCloneCall[] = [];
+    const fetchCalls: FakeFetchCall[] = [];
+    const out = prepareAgentWorkspace({
+      ticketId: "AGT-020",
+      repoSlug: "OpenThinkAi/open-team",
+      cloneUri: STAMP_URI,
+      cloneRunner: recordCloneRunner({ status: 0, stderr: "" }, cloneCalls),
+      inspectRunner: fakeInspectRunner(aheadInspect(3)),
+      fetchRunner: recordFetchRunner({ status: 0, stderr: "" }, fetchCalls),
+      rootDir,
+    });
+
+    assert.equal(cloneCalls.length, 0, "cloneRunner must NOT be called on reuse");
+    assert.equal(fetchCalls.length, 1, "fetchRunner must be called on reuse");
+    assert.equal(out.reused, true, "reused must be true");
+    assert.equal(out.path, join(ticketDir, "repo"));
+    // WIP file must survive.
+    assert.equal(
+      existsSync(join(ticketDir, "repo", "wip.ts")),
+      true,
+      "sentinel WIP file must survive reuse",
+    );
+  });
+
+  it("re-clones when aheadCount === 0 (clean worktree, not reused)", () => {
+    fakeHome = withFakeHome();
+    const ticketDir = join(rootDir, "agt-021");
+    mkdirSync(join(ticketDir, "repo"), { recursive: true });
+    writeFileSync(join(ticketDir, "repo", "stale.ts"), "// stale\n");
+
+    const cloneCalls: FakeCloneCall[] = [];
+    const out = prepareAgentWorkspace({
+      ticketId: "AGT-021",
+      repoSlug: "OpenThinkAi/open-team",
+      cloneUri: STAMP_URI,
+      cloneRunner: recordCloneRunner({ status: 0, stderr: "" }, cloneCalls),
+      inspectRunner: fakeInspectRunner(CLEAN_INSPECT),
+      rootDir,
+    });
+
+    assert.equal(cloneCalls.length, 1, "cloneRunner must be called for clean re-clone");
+    assert.equal(out.reused, false);
+    assert.equal(existsSync(join(ticketDir, "repo", "stale.ts")), false, "clean re-clone must remove stale files");
+  });
+
+  it("--fresh forces re-clone even when aheadCount > 0", () => {
+    fakeHome = withFakeHome();
+    const ticketDir = join(rootDir, "agt-022");
+    mkdirSync(join(ticketDir, "repo"), { recursive: true });
+    writeFileSync(join(ticketDir, "repo", "wip.ts"), "// work in progress\n");
+
+    const cloneCalls: FakeCloneCall[] = [];
+    const out = prepareAgentWorkspace({
+      ticketId: "AGT-022",
+      repoSlug: "OpenThinkAi/open-team",
+      cloneUri: STAMP_URI,
+      cloneRunner: recordCloneRunner({ status: 0, stderr: "" }, cloneCalls),
+      inspectRunner: fakeInspectRunner(aheadInspect(5)),
+      fresh: true,
+      rootDir,
+    });
+
+    assert.equal(cloneCalls.length, 1, "cloneRunner must be called when --fresh is set");
+    assert.equal(out.reused, false);
+    assert.equal(
+      existsSync(join(ticketDir, "repo", "wip.ts")),
+      false,
+      "--fresh must discard WIP",
+    );
+  });
+
+  it("AC-6: throws on missing .git directory in existing worktree", () => {
+    fakeHome = withFakeHome();
+    const ticketDir = join(rootDir, "agt-023");
+    mkdirSync(join(ticketDir, "repo"), { recursive: true });
+
+    assert.throws(
+      () =>
+        prepareAgentWorkspace({
+          ticketId: "AGT-023",
+          repoSlug: "OpenThinkAi/open-team",
+          cloneUri: STAMP_URI,
+          cloneRunner: recordCloneRunner({ status: 0, stderr: "" }),
+          inspectRunner: fakeInspectRunner({
+            gitDir: false,
+            inProgress: false,
+            aheadCount: 0,
+            status: 128,
+            stderr: "not a git repository",
+          }),
+          rootDir,
+        }),
+      /unexpected state.*missing or bare/,
+      "must throw on missing .git",
+    );
+  });
+
+  it("AC-6: throws on mid-rebase worktree", () => {
+    fakeHome = withFakeHome();
+    const ticketDir = join(rootDir, "agt-024");
+    mkdirSync(join(ticketDir, "repo"), { recursive: true });
+
+    assert.throws(
+      () =>
+        prepareAgentWorkspace({
+          ticketId: "AGT-024",
+          repoSlug: "OpenThinkAi/open-team",
+          cloneUri: STAMP_URI,
+          cloneRunner: recordCloneRunner({ status: 0, stderr: "" }),
+          inspectRunner: fakeInspectRunner({
+            gitDir: true,
+            inProgress: true,
+            aheadCount: 0,
+            status: 0,
+            stderr: "",
+          }),
+          rootDir,
+        }),
+      /unexpected state.*mid-rebase/,
+      "must throw on mid-rebase worktree",
+    );
+  });
+
+  it("AC-6: throws when rev-list fails (aheadCount -1)", () => {
+    fakeHome = withFakeHome();
+    const ticketDir = join(rootDir, "agt-025");
+    mkdirSync(join(ticketDir, "repo"), { recursive: true });
+
+    assert.throws(
+      () =>
+        prepareAgentWorkspace({
+          ticketId: "AGT-025",
+          repoSlug: "OpenThinkAi/open-team",
+          cloneUri: STAMP_URI,
+          cloneRunner: recordCloneRunner({ status: 0, stderr: "" }),
+          inspectRunner: fakeInspectRunner({
+            gitDir: true,
+            inProgress: false,
+            aheadCount: -1,
+            status: 128,
+            stderr: "origin/HEAD unknown",
+          }),
+          rootDir,
+        }),
+      /unexpected state.*rev-list failed/,
+      "must throw when rev-list fails",
+    );
+  });
+
+  it("non-fatal fetch failure on reuse path: still returns reused: true", () => {
+    fakeHome = withFakeHome();
+    const ticketDir = join(rootDir, "agt-026");
+    mkdirSync(join(ticketDir, "repo"), { recursive: true });
+    writeFileSync(join(ticketDir, "repo", "wip.ts"), "// wip\n");
+
+    const cloneCalls: FakeCloneCall[] = [];
+    const out = prepareAgentWorkspace({
+      ticketId: "AGT-026",
+      repoSlug: "OpenThinkAi/open-team",
+      cloneUri: STAMP_URI,
+      cloneRunner: recordCloneRunner({ status: 0, stderr: "" }, cloneCalls),
+      inspectRunner: fakeInspectRunner(aheadInspect(2)),
+      fetchRunner: recordFetchRunner({ status: 1, stderr: "network timeout" }),
+      rootDir,
+    });
+
+    // Fetch failed, but reuse should still proceed.
+    assert.equal(out.reused, true);
+    assert.equal(cloneCalls.length, 0, "cloneRunner must NOT be called");
+    assert.equal(existsSync(join(ticketDir, "repo", "wip.ts")), true, "WIP must survive fetch failure");
+  });
+
+  it("base SHA is still captured on the reuse path", () => {
+    fakeHome = withFakeHome();
+    const ticketDir = join(rootDir, "agt-027");
+    mkdirSync(join(ticketDir, "repo"), { recursive: true });
+    writeFileSync(join(ticketDir, "repo", "wip.ts"), "// wip\n");
+
+    const out = prepareAgentWorkspace({
+      ticketId: "AGT-027",
+      repoSlug: "OpenThinkAi/open-team",
+      cloneUri: STAMP_URI,
+      cloneRunner: recordCloneRunner({ status: 0, stderr: "" }),
+      inspectRunner: fakeInspectRunner(aheadInspect(1)),
+      fetchRunner: recordFetchRunner({ status: 0, stderr: "" }),
+      revParseRunner: fakeRevParseRunner({ status: 0, stdout: `${FAKE_BASE_SHA}\n` }),
+      rootDir,
+    });
+
+    assert.equal(out.reused, true);
+    assert.equal(out.baseSha, FAKE_BASE_SHA, "baseSha must be captured on reuse path");
+    const expectedFile = join(ticketDir, BASE_SHA_FILENAME);
+    assert.equal(out.baseShaFile, expectedFile);
+    assert.equal(existsSync(expectedFile), true, "base-sha file must be written on reuse path");
   });
 });
 

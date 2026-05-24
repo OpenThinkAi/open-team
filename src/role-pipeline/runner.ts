@@ -51,6 +51,11 @@ export interface AssignOptions {
    * prompt so unit tests can exercise the runner logic without I/O.
    */
   cloneUriResolver?: CloneUriResolver;
+  /**
+   * When true, force a fresh re-clone of the worktree, discarding any unpushed
+   * WIP. Passed through to `prepareAgentWorkspace` as `fresh: true`.
+   */
+  fresh?: boolean;
 }
 
 export type CloneUriResolver = (slug: string) => Promise<string>;
@@ -104,6 +109,12 @@ export interface AssignmentContext {
   /** Path to the `--append-system-prompt` payload, or null when none. */
   systemPromptFile: string | null;
   haikuDownshift: boolean;
+  /**
+   * Whether the prepared worktree was reused from a prior phase (true) rather
+   * than freshly cloned (false). Surfaces AC-4 observability so orchestrators
+   * and subagents know the worktree already carries commits from an earlier role.
+   */
+  reused: boolean;
   /**
    * Telemetry handle for the orchestrator's teardown `oteam telemetry record`
    * call after the subagent finishes. Null when telemetry is off or the state
@@ -260,6 +271,7 @@ export async function prepareAssignment(
         ticketId: ticket.id,
         repoSlug: ticket.repo,
         cloneUri,
+        fresh: opts.fresh,
         activeTicketIds: collectActiveTicketIds(resolvedVault.path),
       });
     } catch (err) {
@@ -319,6 +331,7 @@ export async function prepareAssignment(
     originUrl: cloneUri,
     baseSha: workspace?.baseSha ?? null,
     baseShaFile: workspace?.baseShaFile ?? null,
+    reused: workspace?.reused ?? false,
     envFiles: ticket.repo ? resolveEnvFiles(ticket.repo) : [],
     model,
     slashCommand: `/assign-ticket ${ticketPath}`,
@@ -333,7 +346,10 @@ export function assignmentSummary(ctx: AssignmentContext): string {
   const lines = [
     `oteam assign: prepared ${ctx.ticketId} (${ctx.phase ?? ctx.state} phase)`,
   ];
-  if (ctx.workspacePath) lines.push(`  worktree: ${ctx.workspacePath}`);
+  if (ctx.workspacePath) {
+    const worktreeStatus = ctx.reused ? " (reused, unpushed commits)" : " (fresh clone)";
+    lines.push(`  worktree: ${ctx.workspacePath}${worktreeStatus}`);
+  }
   lines.push(`  model:    ${ctx.model}`);
   lines.push(
     `  next:     dispatch a subagent to run \`${ctx.slashCommand}\`` +

@@ -20,6 +20,7 @@ function ctx(overrides: Partial<AssignmentContext> = {}): AssignmentContext {
     originUrl: "ssh://git@stamp.example/srv/git/foo.git",
     baseSha: "0123456789abcdef0123456789abcdef01234567",
     baseShaFile: "/tmp/open-team-issues/agt-013/base-sha",
+    reused: false,
     envFiles: [],
     model: "claude-opus-4-7",
     slashCommand: "/assign-ticket /ws/tickets/refined/AGT-013-foo.md",
@@ -37,6 +38,17 @@ describe("runner: assignment summary", () => {
     assert.match(out, /worktree: \/tmp\/open-team-issues\/agt-013\/repo/);
     assert.match(out, /model:\s+claude-opus-4-7/);
     assert.match(out, /dispatch a subagent to run/);
+  });
+
+  it("shows (fresh clone) suffix when reused is false", () => {
+    const out = assignmentSummary(ctx({ reused: false }));
+    assert.match(out, /worktree:.*\(fresh clone\)/);
+    assert.doesNotMatch(out, /reused/);
+  });
+
+  it("shows (reused, unpushed commits) suffix when reused is true", () => {
+    const out = assignmentSummary(ctx({ reused: true }));
+    assert.match(out, /worktree:.*\(reused, unpushed commits\)/);
   });
 
   it("omits the worktree line for workspace-only tickets", () => {
