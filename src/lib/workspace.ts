@@ -159,7 +159,7 @@ export interface InspectResult {
    * failure (treated as AC-6 unexpected-state error).
    */
   aheadCount: number;
-  /** Raw exit status of the rev-list command; 0 on success. */
+  /** Exit status of the innermost failing command; 0 on success. */
   status: number;
   /** Stderr from the innermost failing command, for error messages. */
   stderr: string;
@@ -226,7 +226,7 @@ export function prepareAgentWorkspace(
     // whether to reuse or re-clone.
     const inspect = inspectRunner(repoDir);
 
-    if (!inspect.gitDir || inspect.inProgress || inspect.status !== 0 || inspect.aheadCount < 0) {
+    if (!inspect.gitDir || inspect.inProgress || inspect.aheadCount < 0) {
       // AC 6: unexpected state — surface a clear error, do NOT silently rm+clone.
       const reason = !inspect.gitDir
         ? "missing or bare .git directory"
