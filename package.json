@@ -14,6 +14,7 @@
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --test --import tsx 'tests/**/*.test.ts'",
+    "postinstall": "node dist/index.js install-commands || true",
     "prepublishOnly": "npm run build"
   },
   "homepage": "https://openthink.dev",

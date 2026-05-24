@@ -25,6 +25,24 @@ export const BUNDLED_COMMANDS: ReadonlyArray<{ src: string; dest: string }> = [
 ];
 
 /**
+ * Per-file install result. A result is "written" when the file was created or
+ * updated, "skipped" when contents already matched (idempotent no-op), and
+ * "failed" when a write error occurred.
+ */
+export type InstallFileResult =
+  | { dir: string; dest: string; status: "written" | "skipped" }
+  | { dir: string; dest: string; status: "failed"; error: unknown };
+
+/**
+ * Aggregate result returned by `installRolePipelineSlashCommand()`.
+ */
+export interface InstallResult {
+  written: Array<{ dir: string; dest: string }>;
+  skipped: Array<{ dir: string; dest: string }>;
+  failed: Array<{ dir: string; dest: string; error: unknown }>;
+}
+
+/**
  * Install the bundled role-pipeline slash-command bodies into every Claude
  * config dir we can reasonably find. The spawned `claude` session picks the
  * one matching its $CLAUDE_CONFIG_DIR; agentic-desktop and many users run
@@ -38,8 +56,13 @@ export const BUNDLED_COMMANDS: ReadonlyArray<{ src: string; dest: string }> = [
  * Idempotent: skips writes when contents already match. Best-effort: a write
  * failure on one target doesn't stop the others. No-op for any command whose
  * bundled source isn't present (dev-mode without `npm run build`).
+ *
+ * Returns a structured per-file result so callers (e.g. `oteam install-commands`)
+ * can report success/failure. Existing callers that ignore the return value
+ * (the runner) continue to work unchanged.
  */
-export function installRolePipelineSlashCommand(): void {
+export function installRolePipelineSlashCommand(): InstallResult {
+  const result: InstallResult = { written: [], skipped: [], failed: [] };
   const targets = resolveTargetDirs();
   for (const { src, dest } of BUNDLED_COMMANDS) {
     if (!existsSync(src)) continue;
@@ -50,15 +73,21 @@ export function installRolePipelineSlashCommand(): void {
         const target = join(dir, dest);
         if (existsSync(target)) {
           const current = readFileSync(target);
-          if (current.equals(bundled)) continue;
+          if (current.equals(bundled)) {
+            result.skipped.push({ dir, dest });
+            continue;
+          }
         }
         copyFileSync(src, target);
-      } catch {
+        result.written.push({ dir, dest });
+      } catch (err) {
         // Don't fail the spawn over an install hiccup — the user can still
         // invoke `claude` manually if their preferred profile is unreachable.
+        result.failed.push({ dir, dest, error: err });
       }
     }
   }
+  return result;
 }
 
 function resolveTargetDirs(): string[] {

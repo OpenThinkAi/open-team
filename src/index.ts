@@ -4,6 +4,7 @@ import { runList } from "./commands/list.ts";
 import { runArchive } from "./commands/archive.ts";
 import { buildConfigCommand } from "./commands/config.ts";
 import { buildInitCommand } from "./commands/init.ts";
+import { buildInstallCommandsCommand } from "./commands/install-commands.ts";
 import { buildProjectCommand } from "./commands/project.ts";
 import { buildTelemetryCommand } from "./commands/telemetry.ts";
 import { buildTicketCommand } from "./commands/ticket.ts";
@@ -162,6 +163,7 @@ program
 
 program.addCommand(buildConfigCommand());
 program.addCommand(buildInitCommand());
+program.addCommand(buildInstallCommandsCommand());
 program.addCommand(buildProjectCommand());
 program.addCommand(buildTelemetryCommand());
 program.addCommand(buildTicketCommand());
