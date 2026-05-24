@@ -26,36 +26,19 @@ You are the **in-session orchestrator** for one workspace project. You run insid
 
 7. **`stamp review` is the one remaining metered call** (it fans out reviewers via the Agent SDK inside stamp-cli). It is intentional, low-frequency, and gated — do not try to route around it. Everything else you and your subagents do is on subscription.
 
-## The core subroutine — "drive one role for a ticket"
+## The per-ticket lane
 
-Every role advance uses this three-step subroutine. Reuse it from the phases below.
+The mechanics of advancing one ticket — the **core subroutine** ("drive one role":
+`oteam assign` → parse the `oteam:assignment` block → dispatch a Task subagent →
+record telemetry), the role sequence, and the return-marker interpretations — live in
+the **shared ticket lane**, so `/dispatch` and this skill share one source of truth.
+Read it once up front and apply it per ticket:
+`$CLAUDE_CONFIG_DIR/commands/_ticket-lane.md` if that env var is set, otherwise
+`~/.claude/commands/_ticket-lane.md`.
 
-1. **Prepare the workspace** (Bash, foreground — it's fast and deterministic):
-
-   ```sh
-   oteam assign AGT-XXX
-   ```
-
-   Parse the fenced ```` ```oteam:assignment ```` JSON block from stdout. You need `workspacePath`, `slashCommand`, `model`, `phase`, `systemPromptFile`, `envFiles`, and `telemetry`. If `oteam assign` exits non-zero or stderr shows a claim/clone error (already-claimed, issue-closed, clone-uri refused, stamp-enforce mismatch), that's an **exception** — surface it; do not dispatch.
-
-2. **Dispatch a Task subagent** into the prepared worktree. Use `subagent_type: general-purpose` and set the subagent's `model` to the block's `model`. Prompt template:
-
-   > Working directory: `<workspacePath>`. `cd` there first; never read or write outside it.
-   > Read the role-pipeline skill body and follow it for this ticket. **Subagents do not expand slash commands**, so read the body file directly — `$CLAUDE_CONFIG_DIR/commands/assign-ticket.md` if that env var is set, otherwise `~/.claude/commands/assign-ticket.md`. The skill's `$ARGUMENTS` (the ticket file) is the path inside `<slashCommand>` — i.e. `<ticketPath>`.
-   > {If `systemPromptFile` is set:} First read `<systemPromptFile>` for extra context (project README / heuristic hints).
-   > {If `envFiles` is non-empty:} Before any build/install/test, source the env files (guard each — some may not exist yet): `set -a; for f in <envFiles>; do [ -r "$f" ] && . "$f"; done; set +a`.
-   > Advance the ticket **exactly one role**, then STOP at the role-handoff boundary per the skill's own rules. **Do not run `stamp merge` or push anything** — if your role reaches the merge step, run `stamp review` only, then STOP and report the review result as "ready to merge" (GREEN) or the blocking reasons (RED).
-   > Return verbatim: (a) the STOP/PAUSED/BLOCKED marker line, (b) the comment you appended to the ticket, and (c) role-specific payload — for a **spike**, the plan and its S/M/L + H/M/L self-rating; for **implementation**, a one-paragraph diff summary and the stamp review status.
-
-3. **Record telemetry** (best-effort, foreground; never gate on it):
-
-   ```sh
-   oteam telemetry record --ticket AGT-XXX --phase <phase> --model <model> --session <telemetry.sessionId> --started-at <telemetry.startedAt> --exit-code 0 >/dev/null 2>&1 || true
-   ```
-
-   Skip when the block's `telemetry` is `null`. (Per-subagent token accounting is being reworked; record what the block gives you.)
-
-Then branch on the subagent's returned marker.
+**This skill owns what the lane delegates to the caller:** the dependency graph, wave
+grouping, running a wave's tickets as **concurrent subagents**, and **batching the two
+gate-points across the wave** (Phases 2b and 2d). The lane owns everything per-ticket.
 
 ## Phase 0 — Pre-flight
 
@@ -113,17 +96,14 @@ Treat the output as background context (`## Prior context for AGT-XXX (<repo>)`)
 
 ### 2a — Product, then spike (parallel across the wave)
 
-For each ticket in the wave, run the **core subroutine** for the Product role, then the spike role. Drive these in parallel across the wave (concurrent subagents). Interpret returns:
-
-- Product `✅ DONE — Refined`: advance to the spike for that ticket.
-- Product `⏸️ PAUSED — needs answers`: surface to the user (Product can't proceed without input); drop that ticket from the wave until answered.
-- Spike auto-proceeded (S/H rated): hold the ticket at "plan ready, no review needed" and carry it into the plan gate as auto-approvable.
-- Spike `⏸️ PAUSED — Spike ready for plan review`: carry the plan into the plan gate.
-- Any `STOP:`/`🛑 BLOCKED`: surface with the error.
+For each ticket in the wave, follow the lane's **L1 (Product, then spike)**, driving
+the tickets as concurrent subagents across the wave. The lane defines the
+return-marker interpretations; carry each ticket's spike outcome (auto-proceed `S/H`,
+or paused-for-review) into the plan gate.
 
 ### 2b — PLAN GATE (batched per wave)
 
-Once every ticket in the wave has a plan, present them **together**:
+This is the lane's **GATE-POINT 1**, batched across the wave. Once every ticket in the wave has a plan, present them **together**:
 
 - For each: ticket, one-line approach, scope/confidence rating, and any open questions.
 - Resolve taste-level questions yourself and say so. Surface only roadmap/architectural questions for the user.
@@ -133,16 +113,14 @@ Ask once: "Approve these plans? (or call out changes)". On approval, for each ti
 
 ### 2c — Implementation + QA + review (parallel across the wave)
 
-For each approved ticket, run the **core subroutine** for the implementation role (the subagent implements, tests, and runs `stamp review` — but **stops before `stamp merge`**), then the QA role against the worktree. Parallel across the wave. Interpret returns:
-
-- Implementation `ready to merge` (stamp review GREEN) + QA `✅ DONE — QA approved`: carry into the merge gate.
-- Stamp review RED after the skill's 5-round rule: surface the blocking reasons.
-- QA `changes_requested`: re-dispatch implementation with the QA feedback noted in a comment (respect the 3-attempt cap).
-- Any architectural surprise in the diff: surface (exception).
+For each approved ticket, follow the lane's **L2 (Implementation + QA)** as concurrent
+subagents across the wave (impl + tests against the worktree + `stamp review`, stopping
+before merge; then QA). The lane defines the return-marker interpretations and the
+3-attempt re-dispatch rule. Surface any architectural surprise in a diff.
 
 ### 2d — MERGE GATE (batched per wave)
 
-Once every ticket in the wave is GREEN + QA-approved, present the ready-to-merge set **together**: ticket, one-paragraph summary, target branch, review status. Ask once: "Approve merges for this wave?"
+This is the lane's **GATE-POINT 2**, batched across the wave. Once every ticket in the wave is GREEN + QA-approved, present the ready-to-merge set **together**: ticket, one-paragraph summary, target branch, review status. Ask once: "Approve merges for this wave?"
 
 On approval, for each ticket dispatch a final **merge subagent** (core subroutine, but the instruction is: run `stamp merge` + the stamp push path per the skill's Phase 5, then archive). After each lands on `origin/main`, notify immediately: `🔔 AGT-XXX merged to <repo> as <sha>` + one sentence on what it did. If a stamp-merge succeeds but the GitHub mirror push is rejected, **SURFACE — never auto-reconcile** divergence.
 

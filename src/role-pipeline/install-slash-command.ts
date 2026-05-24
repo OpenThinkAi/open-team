@@ -16,7 +16,12 @@ const moduleDir = dirname(fileURLToPath(import.meta.url));
 export const BUNDLED_COMMANDS: ReadonlyArray<{ src: string; dest: string }> = [
   { src: join(moduleDir, "assign-ticket.md"), dest: "assign-ticket.md" },
   { src: join(moduleDir, "implement-project.md"), dest: "implement-project.md" },
+  { src: join(moduleDir, "dispatch.md"), dest: "dispatch.md" },
   { src: join(moduleDir, "refine.md"), dest: "refine.md" },
+  // Shared per-ticket lane read by /implement-project and /dispatch. Not a
+  // user-facing slash command, but it must be installed alongside them so the
+  // orchestrators can read it at `<config>/commands/_ticket-lane.md`.
+  { src: join(moduleDir, "_ticket-lane.md"), dest: "_ticket-lane.md" },
 ];
 
 /**
@@ -27,7 +32,8 @@ export const BUNDLED_COMMANDS: ReadonlyArray<{ src: string; dest: string }> = [
  * `~/.claude-work`), and each needs a copy or the commands are "Unknown
  * command" in that profile.
  *
- * Installs: /assign-ticket, /implement-project, /refine.
+ * Installs: /assign-ticket, /implement-project, /dispatch, /refine (plus the
+ * shared _ticket-lane.md body the orchestrators read).
  *
  * Idempotent: skips writes when contents already match. Best-effort: a write
  * failure on one target doesn't stop the others. No-op for any command whose
