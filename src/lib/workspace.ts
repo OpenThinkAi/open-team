@@ -88,7 +88,8 @@ export interface PrepareWorkspaceOptions {
   revParseRunner?: RevParseRunner;
   /**
    * Injectable runner that inspects an existing worktree to determine whether
-   * it's safe to reuse. Default impl runs `git rev-list --count origin/HEAD..HEAD`
+   * it's safe to reuse. Default impl runs
+   * `git rev-list --count --branches --not --remotes`
    * (with a `git rev-parse --git-dir` precheck). Tests pass a fake so the
    * reuse-vs-clone decision is exercised without real git.
    */
@@ -134,8 +135,9 @@ export interface RevParseResult {
  *      healthy (non-bare) git repo.
  *   2. Checks for in-progress rebase/merge state files that make the worktree
  *      unsafe to reuse without human intervention.
- *   3. Runs `git -C <repoDir> rev-list --count origin/HEAD..HEAD` to count
- *      unpushed commits.
+ *   3. Runs `git -C <repoDir> rev-list --count --branches --not --remotes` to
+ *      count unpushed commits across all local branches (not just the
+ *      checked-out HEAD — see the #18 note on `defaultInspectRunner`).
  *
  * Tests inject a fake that returns canned results without real git I/O.
  */
@@ -154,7 +156,9 @@ export interface InspectResult {
    */
   inProgress: boolean;
   /**
-   * Number of commits in the worktree ahead of `origin/HEAD` (i.e. unpushed).
+   * Number of unpushed commits in the worktree — reachable from any local
+   * branch but not from any remote-tracking ref (`--branches --not --remotes`),
+   * so unpushed work on a non-checked-out `agt/<id>` branch still counts (#18).
    * Only meaningful when `gitDir === true && !inProgress`. `-1` on rev-list
    * failure (treated as AC-6 unexpected-state error).
    */
@@ -346,7 +350,8 @@ const defaultRevParseRunner: RevParseRunner = (repoDir) => {
 
 /**
  * Default inspect runner: checks for a valid git dir, mid-progress state, then
- * counts unpushed commits with `git rev-list --count origin/HEAD..HEAD`.
+ * counts unpushed commits with `git rev-list --count --branches --not --remotes`
+ * (all local branches, not just HEAD — see the #18 note in the body).
  *
  * Returns `gitDir: false` when the dir isn't a healthy git repo.
  * Returns `inProgress: true` when a rebase or merge is in flight.
@@ -396,10 +401,21 @@ export const defaultInspectRunner: InspectRunner = (repoDir) => {
     };
   }
 
-  // Count unpushed commits: origin/HEAD..HEAD.
+  // Count unpushed commits across ALL local branches, not just the checked-out
+  // HEAD: `--branches --not --remotes` = commits reachable from any local branch
+  // but not from any remote-tracking ref. This is the load-bearing fix for #18 —
+  // the impl role commits to `agt/<id>` but may leave the worktree on `main`, so
+  // an `origin/HEAD..HEAD` count would read 0 and the rm+clone path would wipe
+  // the unpushed `agt/<id>` work. Counting all local branches preserves it
+  // regardless of which branch is checked out.
+  //
+  // Edge: a repo with no remote-tracking refs at all has nothing to exclude, so
+  // this counts every local commit and we conservatively *reuse* (the old
+  // `origin/HEAD..HEAD` form errored with -1 → AC-6). Moot in practice — agent
+  // worktrees are always cloned from origin, so `origin/*` refs exist.
   const revList = spawnSync(
     "git",
-    ["-C", repoDir, "rev-list", "--count", "origin/HEAD..HEAD"],
+    ["-C", repoDir, "rev-list", "--count", "--branches", "--not", "--remotes"],
     { encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
   );
   if (revList.status !== 0) {

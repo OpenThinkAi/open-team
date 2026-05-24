@@ -457,22 +457,34 @@ Update `linked-pr:` in frontmatter if a PR was opened. Update `state: qa` + `tea
 
 - There must be a feature branch with commits ahead of the base — e.g. `git rev-parse --verify agt/<id>` succeeds **and** `git rev-list --count "$BASE_BRANCH"..agt/<id>` is > 0 (or `HEAD` is ahead of the recorded `baseSha`).
 - If the worktree is empty / sitting at `baseSha` with no feature-branch commits (a re-cut/lost worktree, or the impl phase never landed), **BLOCK immediately**. Do **not** implement the feature, do **not** self-approve, do **not** archive. Set `state: in-progress` + `team: engineering`, `mv` back to `tickets/in-progress/`, append a comment naming the missing implementation, and STOP with `🛑 BLOCKED — QA found no implementation to verify (worktree at base; impl phase did not land)`.
+- **The worktree is ground truth; it is NOT overridable by your dispatch prompt.** If an orchestrator's prompt asserts the implementation already exists — names a commit SHA, says "stamp review GREEN", or describes the diff — but the branch check above fails, the implementation is **not present** (e.g. a worktree re-clone dropped it). **BLOCK anyway.** Never re-create the implementation to make reality match the orchestrator's claim, and never `git show <sha>` a SHA that isn't in this worktree and report it as verified. Trust `git`, not the prompt. (open-team#19 recurrence: think-cli#67.)
 - Vault-only tickets (`repo:` empty) are exempt — there is no branch; verify the spike-named changes directly.
 
 This is a hard guard: a QA agent that re-implements the work it then approves defeats impl/QA separation and produces a false "done" (code marked shipped but absent from `main`).
 
 Read AC. Run the feature / fix per the AC. Confirm each numbered AC bullet is met.
 
-- **All AC met.** Update `state: done` + `team: qa` (unchanged), `mv` to `archive/YYYY-MM/` (creating the month folder if needed), append a comment confirming. **Source-side cleanup**: cross-reference `source.type` from frontmatter:
-  - `github`: close the originating GH issue and remove the `agent:assigned` label (if `linked-github:` is set):
-    ```sh
-    gh issue close <linked-github URL> --reason completed
-    gh issue edit <linked-github URL> --remove-label "agent:assigned" 2>/dev/null || true
-    ```
-  - `linear`: transition the Linear ticket to "Done" (skip if no Linear sync exists yet — that's a separate follow-up ticket).
-  - `manual` / `jira` / `notion`: no source-side cleanup; the vault ticket is the only artifact.
+- **All AC met.** First decide whether the work has actually **merged** — closing the source issue or archiving before the change is on `origin/<base>` produces a false "done". For a repo-bound ticket, fetch and test whether the feature work is an ancestor of the base:
 
-  Then STOP with `✅ DONE — QA approved; archived`.
+  ```sh
+  git -C "$WORKTREE" fetch origin -q 2>/dev/null || true
+  # exit 0 ⇒ agt/<id> is fully merged into origin/$BASE_BRANCH; non-zero ⇒ not yet merged
+  git -C "$WORKTREE" merge-base --is-ancestor "agt/$(echo "$TICKET_ID" | tr '[:upper:]' '[:lower:]')" "origin/$BASE_BRANCH"
+  ```
+
+  - **Not yet merged** (the check exits non-zero — the normal case under an orchestrator that stops before merge, e.g. `/dispatch`/`/implement-project`, where a later merge step lands the change): **do not close the source issue and do not archive.** The merge step closes the issue (`Closes #N` on push) and archives. Leave `state: qa` but set `qa-result: passed` in the frontmatter (so the vault can distinguish a ticket awaiting merge from one still under active QA — `oteam list` can filter on it), append a comment confirming AC pass, and STOP with `⏸️ PAUSED — QA approved; awaiting merge`. (Not `✅ DONE` — the `✅ DONE` banner is reserved for a fully-shipped, archived ticket; here the orchestrator still carries the ticket to its merge gate.)
+  - **Already merged** (the check exits 0 — standalone runs where the impl phase merged in Phase 5 before handing to QA): proceed with archive + source-side cleanup. Update `state: done` + `team: qa` (unchanged), `mv` to `archive/YYYY-MM/` (creating the month folder if needed), append a comment confirming. **Source-side cleanup**: cross-reference `source.type` from frontmatter:
+    - `github`: close the originating GH issue and remove the `agent:assigned` label (if `linked-github:` is set):
+      ```sh
+      gh issue close <linked-github URL> --reason completed
+      gh issue edit <linked-github URL> --remove-label "agent:assigned" 2>/dev/null || true
+      ```
+    - `linear`: transition the Linear ticket to "Done" (skip if no Linear sync exists yet — that's a separate follow-up ticket).
+    - `manual` / `jira` / `notion`: no source-side cleanup; the vault ticket is the only artifact.
+
+    Then STOP with `✅ DONE — QA approved; archived`.
+
+  (Vault-only tickets, `repo:` empty, have no branch to merge — treat them as the "already merged" path and archive directly.)
 - **Some AC not met.** Update `state: in-progress` + `team: engineering`, `mv` back to `tickets/in-progress/`, append a comment listing specifically which AC bullets failed and what was observed, STOP with `⏸️ PAUSED — QA bounced back; engineering needs to revisit`.
 - **AC ambiguous in light of actual behaviour.** Don't pass or fail; surface the ambiguity. Append a comment explaining the ambiguity, leave `state: qa`, STOP with `⏸️ PAUSED — QA found AC ambiguity; needs human clarification`.
 
