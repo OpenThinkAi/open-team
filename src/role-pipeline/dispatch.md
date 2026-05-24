@@ -61,10 +61,17 @@ lane**. Read it once up front and follow it for the single ticket this issue bec
 
    If `state` is closed → STOP (`🛑 already closed`). If labels already include
    `agent:assigned` → STOP (`🛑 already claimed`; another agent holds the lease).
-   Otherwise claim it:
+
+   Otherwise claim it. **The `agent:assigned` label may not exist in the target
+   repo yet** (it's per-repo) — create it first (idempotent; ignore "already
+   exists"), then add it. **Do not swallow the claim's exit status** — if the
+   `gh issue edit` fails (missing label, perms, race), that's an **exception**:
+   surface it and STOP; never proceed unclaimed.
 
    ```sh
-   gh issue edit <number> --repo <owner/repo> --add-label "agent:assigned"
+   gh label create "agent:assigned" --repo <owner/repo> \
+     --description "Agent is currently working this issue" --color f97316 2>/dev/null || true
+   gh issue edit <number> --repo <owner/repo> --add-label "agent:assigned"   # must exit 0 — surface on failure
    ```
 
    The label's timeline event records the claimant + timestamp (the stale-reclaim
