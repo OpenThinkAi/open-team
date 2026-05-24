@@ -453,6 +453,14 @@ Update `linked-pr:` in frontmatter if a PR was opened. Update `state: qa` + `tea
 
 ## Phase 5 — QA agent (state: qa)
 
+**Step 0 — Verify an implementation exists before anything else. QA verifies; it never implements.** For a repo-bound ticket (`repo:` set), confirm the implementation is actually present in the worktree *before* touching the ACs:
+
+- There must be a feature branch with commits ahead of the base — e.g. `git rev-parse --verify agt/<id>` succeeds **and** `git rev-list --count "$BASE_BRANCH"..agt/<id>` is > 0 (or `HEAD` is ahead of the recorded `baseSha`).
+- If the worktree is empty / sitting at `baseSha` with no feature-branch commits (a re-cut/lost worktree, or the impl phase never landed), **BLOCK immediately**. Do **not** implement the feature, do **not** self-approve, do **not** archive. Set `state: in-progress` + `team: engineering`, `mv` back to `tickets/in-progress/`, append a comment naming the missing implementation, and STOP with `🛑 BLOCKED — QA found no implementation to verify (worktree at base; impl phase did not land)`.
+- Vault-only tickets (`repo:` empty) are exempt — there is no branch; verify the spike-named changes directly.
+
+This is a hard guard: a QA agent that re-implements the work it then approves defeats impl/QA separation and produces a false "done" (code marked shipped but absent from `main`).
+
 Read AC. Run the feature / fix per the AC. Confirm each numbered AC bullet is met.
 
 - **All AC met.** Update `state: done` + `team: qa` (unchanged), `mv` to `archive/YYYY-MM/` (creating the month folder if needed), append a comment confirming. **Source-side cleanup**: cross-reference `source.type` from frontmatter:
