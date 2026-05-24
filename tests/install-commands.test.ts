@@ -181,5 +181,11 @@ describe("package.json postinstall hook (AGT-426)", () => {
       /\|\| true/,
       "postinstall must use || true so a hiccup does not fail the global install",
     );
+    // Must respect the opt-out env var so CI / security-conscious users can skip
+    assert.match(
+      postinstall,
+      /OTEAM_SKIP_INSTALL_COMMANDS/,
+      "postinstall must honour OTEAM_SKIP_INSTALL_COMMANDS opt-out",
+    );
   });
 });

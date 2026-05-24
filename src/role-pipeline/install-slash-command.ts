@@ -25,16 +25,11 @@ export const BUNDLED_COMMANDS: ReadonlyArray<{ src: string; dest: string }> = [
 ];
 
 /**
- * Per-file install result. A result is "written" when the file was created or
- * updated, "skipped" when contents already matched (idempotent no-op), and
- * "failed" when a write error occurred.
- */
-export type InstallFileResult =
-  | { dir: string; dest: string; status: "written" | "skipped" }
-  | { dir: string; dest: string; status: "failed"; error: unknown };
-
-/**
  * Aggregate result returned by `installRolePipelineSlashCommand()`.
+ *
+ * - `written`: files that were created or updated.
+ * - `skipped`: files whose contents already matched (idempotent no-op).
+ * - `failed`:  files that could not be written (best-effort; includes the error).
  */
 export interface InstallResult {
   written: Array<{ dir: string; dest: string }>;
