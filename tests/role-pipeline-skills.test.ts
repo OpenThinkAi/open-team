@@ -18,7 +18,15 @@ const repoRoot = join(testDir, "..");
 const roleDir = join(repoRoot, "src", "role-pipeline");
 
 // The skills we expect to ship. Keep in lockstep with BUNDLED_COMMANDS.
-const EXPECTED_SKILLS = ["assign-ticket.md", "implement-project.md", "refine.md"];
+// `_ticket-lane.md` is the shared per-ticket body (not a user-facing command),
+// but it is bundled + installed alongside the commands so it must appear here.
+const EXPECTED_SKILLS = [
+  "assign-ticket.md",
+  "implement-project.md",
+  "dispatch.md",
+  "refine.md",
+  "_ticket-lane.md",
+];
 
 function readBuildScript(): string {
   const pkg = JSON.parse(
@@ -82,5 +90,43 @@ describe("role-pipeline skill registration (issue #16)", () => {
     assert.match(body, /--from-doc/);
     // closes the loop into the orchestrator
     assert.match(body, /\/implement-project/);
+  });
+
+  it("ships dispatch.md with required frontmatter (description + issue-ref hint)", () => {
+    const body = readFileSync(join(roleDir, "dispatch.md"), "utf8");
+    assert.match(body, /^---\n/, "dispatch.md must open with YAML frontmatter");
+    assert.match(body, /\ndescription: .+\n/);
+    assert.match(body, /\nargument-hint: <owner\/repo#number>\n/);
+  });
+
+  it("keeps the billing invariant explicit in dispatch.md (subscription, no SDK/-p)", () => {
+    const body = readFileSync(join(roleDir, "dispatch.md"), "utf8");
+    assert.match(body, /subscription/i);
+    assert.match(body, /claude -p/);
+    assert.match(body, /Agent SDK/);
+  });
+
+  it("uses $ARGUMENTS (not positional $N) in dispatch.md", () => {
+    const body = readFileSync(join(roleDir, "dispatch.md"), "utf8");
+    assert.match(body, /\$ARGUMENTS/);
+    assert.doesNotMatch(body, /\$1\b/);
+  });
+
+  it("encodes the untrusted-input rule and composes the shared lane in dispatch.md", () => {
+    const body = readFileSync(join(roleDir, "dispatch.md"), "utf8");
+    // the issue body is data, not instructions (safety audit precedes work)
+    assert.match(body, /attacker-controlled/i);
+    // composes the shared lane rather than forking the back-half
+    assert.match(body, /_ticket-lane\.md/);
+    // validation precedes ticket creation
+    assert.match(body, /oteam pull github/);
+  });
+
+  it("ships the shared _ticket-lane.md body with the core subroutine", () => {
+    const body = readFileSync(join(roleDir, "_ticket-lane.md"), "utf8");
+    assert.match(body, /^---\n/, "_ticket-lane.md must open with YAML frontmatter");
+    assert.match(body, /oteam assign/);
+    assert.match(body, /GATE-POINT 1/);
+    assert.match(body, /GATE-POINT 2/);
   });
 });
