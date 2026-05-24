@@ -10,8 +10,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import {
   BASE_SHA_FILENAME,
+  defaultInspectRunner,
   gcOrphanWorkspaces,
   prepareAgentWorkspace,
   type CloneResult,
@@ -634,6 +636,84 @@ describe("prepareAgentWorkspace input validation", () => {
         /refusing to operate on non-AGT ticket id/,
         `expected throw for ticketId="${bad}"`,
       );
+    }
+  });
+});
+
+describe("defaultInspectRunner (real git) — #18 unpushed-on-non-HEAD-branch", () => {
+  let tmp: string;
+  let work: string;
+
+  function git(cwd: string, args: string[]): string {
+    const r = spawnSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_AUTHOR_NAME: "t",
+        GIT_AUTHOR_EMAIL: "t@example.com",
+        GIT_COMMITTER_NAME: "t",
+        GIT_COMMITTER_EMAIL: "t@example.com",
+      },
+    });
+    if (r.status !== 0) {
+      throw new Error(`git ${args.join(" ")} failed (${r.status}): ${r.stderr}`);
+    }
+    return r.stdout;
+  }
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "oteam-inspect-"));
+    const bare = join(tmp, "bare.git");
+    const seed = join(tmp, "seed");
+    work = join(tmp, "work");
+
+    // A bare origin + a seed clone that pushes `main`, then a fresh clone — the
+    // clone sets `origin/HEAD -> origin/main`, mirroring a real agent worktree.
+    git(tmp, ["-c", "init.defaultBranch=main", "init", "--bare", bare]);
+    git(tmp, ["-c", "init.defaultBranch=main", "init", seed]);
+    writeFileSync(join(seed, "README.md"), "seed\n");
+    git(seed, ["add", "-A"]);
+    git(seed, ["commit", "-m", "seed"]);
+    git(seed, ["remote", "add", "origin", bare]);
+    git(seed, ["push", "-u", "origin", "main"]);
+    git(tmp, ["clone", bare, work]);
+  });
+
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("reports aheadCount 0 on a clean fresh clone (rm+clone path preserved)", () => {
+    const res = defaultInspectRunner(work);
+    assert.equal(res.gitDir, true);
+    assert.equal(res.inProgress, false);
+    assert.equal(res.aheadCount, 0);
+  });
+
+  it("counts an unpushed commit on a NON-checked-out agt/<id> branch (HEAD on main)", () => {
+    // The impl role commits to agt/<id>, then the worktree is left on main.
+    git(work, ["checkout", "-b", "agt/agt-001"]);
+    writeFileSync(join(work, "feature.txt"), "impl\n");
+    git(work, ["add", "-A"]);
+    git(work, ["commit", "-m", "impl on agt/agt-001"]);
+    git(work, ["checkout", "main"]);
+
+    // HEAD is main (0 ahead of origin/HEAD), but agt/agt-001 holds unpushed
+    // work. Before #18 (`origin/HEAD..HEAD`) this read 0 → rm+clone wiped it;
+    // with `--branches --not --remotes` it correctly counts the unpushed commit.
+    const res = defaultInspectRunner(work);
+    assert.equal(res.gitDir, true);
+    assert.equal(res.aheadCount, 1);
+  });
+
+  it("returns gitDir:false on a non-git directory", () => {
+    const notGit = mkdtempSync(join(tmpdir(), "oteam-notgit-"));
+    try {
+      assert.equal(defaultInspectRunner(notGit).gitDir, false);
+    } finally {
+      rmSync(notGit, { recursive: true, force: true });
     }
   });
 });

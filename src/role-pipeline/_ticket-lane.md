@@ -107,8 +107,12 @@ Run the core subroutine for the **implementation** role (subagent implements, te
 **against its prepared worktree**, runs `stamp review`, but **stops before
 `stamp merge`**), then the **QA** role against the worktree. Interpret:
 
-- Implementation `ready to merge` (stamp review GREEN) + QA `✅ DONE — QA approved`:
-  carry into the merge gate.
+- Implementation `ready to merge` (stamp review GREEN) + QA
+  `⏸️ PAUSED — QA approved; awaiting merge`: carry into the merge gate. (Under an
+  orchestrator that stops before merge, this is QA's success marker — it has
+  verified the ACs but deliberately did **not** close the issue or archive, since
+  the merge step does that. A `✅ DONE — QA approved; archived` only appears on a
+  standalone run where the impl phase already merged.)
 - Stamp review RED after the skill's review-round rule: surface the blocking reasons.
 - QA `changes_requested`: re-dispatch implementation with the QA feedback noted in a
   comment (respect the 3-attempt cap).
