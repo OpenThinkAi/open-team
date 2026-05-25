@@ -396,13 +396,13 @@ describe("runList — header + done-footer", () => {
   function seedWithDone(): { root: string; cleanup: () => void } {
     const root = mkdtempSync(join(tmpdir(), "vault-hdr-"));
     mkdirSync(join(root, "tickets", "triage"), { recursive: true });
-    mkdirSync(join(root, "tickets", "qa"), { recursive: true });
+    mkdirSync(join(root, "tickets", "in-progress"), { recursive: true });
     writeFileSync(
       join(root, "tickets", "triage", "AGT-001-a.md"),
       SAMPLE.replace("AGT-042", "AGT-001").replace("state: refined", "state: triage"),
     );
     writeFileSync(
-      join(root, "tickets", "qa", "AGT-002-b.md"),
+      join(root, "tickets", "in-progress", "AGT-002-b.md"),
       SAMPLE.replace("AGT-042", "AGT-002").replace("state: refined", "state: done"),
     );
     return { root, cleanup: () => rmSync(root, { recursive: true, force: true }) };
@@ -458,9 +458,9 @@ describe("runList — header + done-footer", () => {
   it("reports done-only matches instead of a bare (no tickets)", () => {
     const root = mkdtempSync(join(tmpdir(), "vault-done-only-"));
     try {
-      mkdirSync(join(root, "tickets", "qa"), { recursive: true });
+      mkdirSync(join(root, "tickets", "in-progress"), { recursive: true });
       writeFileSync(
-        join(root, "tickets", "qa", "AGT-003-c.md"),
+        join(root, "tickets", "in-progress", "AGT-003-c.md"),
         SAMPLE.replace("AGT-042", "AGT-003").replace("state: refined", "state: done"),
       );
       const out = runList({ vault: root });
@@ -475,7 +475,7 @@ describe("runList — extended filters", () => {
   function seedVault(): { root: string; cleanup: () => void } {
     const root = mkdtempSync(join(tmpdir(), "vault-list-"));
     mkdirSync(join(root, "tickets", "triage"), { recursive: true });
-    mkdirSync(join(root, "tickets", "qa"), { recursive: true });
+    mkdirSync(join(root, "tickets", "in-progress"), { recursive: true });
     mkdirSync(join(root, "archive", "2026-04"), { recursive: true });
 
     writeFileSync(
@@ -488,11 +488,11 @@ describe("runList — extended filters", () => {
         .replace("labels: [foo, bar]", "labels: [security, harden]"),
     );
     writeFileSync(
-      join(root, "tickets", "qa", "AGT-011-other.md"),
+      join(root, "tickets", "in-progress", "AGT-011-other.md"),
       SAMPLE
         .replace("AGT-042", "AGT-011")
-        .replace("state: refined", "state: qa")
-        .replace('"Sample ticket title"', '"unrelated qa ticket"')
+        .replace("state: refined", "state: in-progress")
+        .replace('"Sample ticket title"', '"unrelated ticket"')
         .replace("repo: OpenThinkAi/open-team", "repo: OpenThinkAi/think")
         .replace("priority: high", "priority: medium")
         .replace("labels: [foo, bar]", "labels: [bug]"),

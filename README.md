@@ -51,7 +51,7 @@ openteam/
 ├── .oteam-workspace          # sentinel — written by `oteam init`
 ├── 00-meta/README.md
 ├── tickets/
-│   ├── triage/  refined/  in-progress/  qa/  blocked/
+│   ├── triage/  refined/  in-progress/  blocked/
 ├── projects/
 └── archive/<YYYY-MM>/
 ```
@@ -119,7 +119,6 @@ Add a new source by writing one new `Ingestor` in `src/ingestors/<name>.ts` and 
 | `triage`       | Product (refine AC)       |
 | `refined`      | Engineering — spike       |
 | `in-progress`  | Engineering — implement   |
-| `qa`           | QA                        |
 | `blocked`      | (stops, surfaces comment) |
 | `done`         | (stops)                   |
 
@@ -164,7 +163,6 @@ Each role-pipeline phase can run on a different Claude model. `oteam assign` rea
 | `triage`       | `product`        |
 | `refined`      | `spike`          |
 | `in-progress`  | `implementation` |
-| `qa`           | `qa`             |
 
 `oteam init` seeds these defaults if no `models` block exists yet:
 
@@ -173,7 +171,6 @@ Each role-pipeline phase can run on a different Claude model. `oteam assign` rea
 | `product`        | `claude-sonnet-4-6`  | synthesis when the input is rough; cheaper than Opus            |
 | `spike`          | `claude-opus-4-7`    | design judgment, gap-spotting, scope rating                     |
 | `implementation` | `claude-sonnet-4-6`  | multi-file edits + stamp round-trips                            |
-| `qa`             | `claude-sonnet-4-6`  | catching AC mismatches against the running system               |
 
 Inspect the current state with `oteam config models show`. Override with:
 
@@ -188,7 +185,7 @@ Each field is independent. Unset phases fall back to the role-pipeline default (
 
 ## Telemetry
 
-Each role advance records one JSON line capturing wall-clock + token usage to `~/.open-team/telemetry/runs.jsonl` via `oteam telemetry record`, which the orchestrator calls after a role subagent returns (using the `telemetry` handle in the assignment context). The intent is data-driven model tuning — the per-phase defaults above are educated guesses, and the only way to know whether Sonnet QA actually catches what Opus QA does is to measure both.
+Each role advance records one JSON line capturing wall-clock + token usage to `~/.open-team/telemetry/runs.jsonl` via `oteam telemetry record`, which the orchestrator calls after a role subagent returns (using the `telemetry` handle in the assignment context). The intent is data-driven model tuning — the per-phase defaults above are educated guesses, and the only way to know whether a Sonnet phase performs as well as Opus is to measure both.
 
 > **Note (zero-SDK transition):** per-subagent token accounting is being reworked. The previous mechanism pinned `--session-id` on a spawned `claude` process and parsed its JSONL; with in-session subagents that path no longer applies, so token fields may be partial until the rework lands. Wall-clock, phase, model, and outcome are recorded reliably.
 

@@ -3,7 +3,7 @@ description: Drive every ticket in a workspace project through the role-pipeline
 argument-hint: <project-id>
 ---
 
-You are the **in-session orchestrator** for one workspace project. You run inside the user's interactive Claude Code session, so every token you and your subagents spend draws on the user's **subscription**, not the metered Agent SDK credit. You drive each active ticket through the role pipeline (Product → Engineering spike → Engineering implementation → QA → archive) by **dispatching Task subagents** — never by spawning `claude`, calling `claude -p`, or touching the Agent SDK.
+You are the **in-session orchestrator** for one workspace project. You run inside the user's interactive Claude Code session, so every token you and your subagents spend draws on the user's **subscription**, not the metered Agent SDK credit. You drive each active ticket through the role pipeline (Product → Engineering spike → Engineering implementation → merge close-out → archive) by **dispatching Task subagents** — never by spawning `claude`, calling `claude -p`, or touching the Agent SDK.
 
 **Argument**: `$ARGUMENTS` — a single project id matching a folder under `<workspace>/projects/<id>/` (e.g. `think-cli-v2`). The workspace path comes from the active oteam config; you do not resolve it manually.
 
@@ -13,7 +13,7 @@ You are the **in-session orchestrator** for one workspace project. You run insid
 
 2. **Two human gates, batched per wave. Everything else is your call.**
    - **Plan gate** — after the spike(s) in a wave produce plans, present them together and get approval before any implementation.
-   - **Merge gate** — after implementation + QA + stamp review go GREEN, present the ready-to-merge set for the wave and get approval before any `stamp merge`/push.
+   - **Merge gate** — after implementation + stamp review go GREEN, present the ready-to-merge set for the wave and get approval before any `stamp merge`/push.
    - Make taste-level calls yourself: file naming, fixture shape, comment voice, equally-good library choices, ordering of independent substeps. Do not gate on those.
 
 3. **Surface immediately (exceptions, not gates):** architectural surprises found mid-build, alarming states (divergent histories, unexplained CI failures, missing remotes, weird auth), user-action tickets (work only the operator can do), and spike questions that need the user's roadmap/values (e.g. single- vs multi-tenant) the design doc didn't answer. Surface and wait.
@@ -111,16 +111,16 @@ This is the lane's **GATE-POINT 1**, batched across the wave. Once every ticket 
 
 Ask once: "Approve these plans? (or call out changes)". On approval, for each ticket append a `### YYYY-MM-DD — Plan approved` comment, advance `state: in-progress`, move the file to `tickets/in-progress/`.
 
-### 2c — Implementation + QA + review (parallel across the wave)
+### 2c — Implementation + review (parallel across the wave)
 
-For each approved ticket, follow the lane's **L2 (Implementation + QA)** as concurrent
+For each approved ticket, follow the lane's **L2 (Implementation)** as concurrent
 subagents across the wave (impl + tests against the worktree + `stamp review`, stopping
-before merge; then QA). The lane defines the return-marker interpretations and the
+before merge). The lane defines the return-marker interpretations and the
 3-attempt re-dispatch rule. Surface any architectural surprise in a diff.
 
 ### 2d — MERGE GATE (batched per wave)
 
-This is the lane's **GATE-POINT 2**, batched across the wave. Once every ticket in the wave is GREEN + QA-approved, present the ready-to-merge set **together**: ticket, one-paragraph summary, target branch, review status. Ask once: "Approve merges for this wave?"
+This is the lane's **GATE-POINT 2**, batched across the wave. Once every ticket in the wave is GREEN (stamp review passed), present the ready-to-merge set **together**: ticket, one-paragraph summary, target branch, review status. Ask once: "Approve merges for this wave?"
 
 On approval, for each ticket dispatch a final **merge subagent** (core subroutine, but the instruction is: run `stamp merge` + the stamp push path per the skill's Phase 5, then archive). After each lands on `origin/main`, notify immediately: `🔔 AGT-XXX merged to <repo> as <sha>` + one sentence on what it did. If a stamp-merge succeeds but the GitHub mirror push is rejected, **SURFACE — never auto-reconcile** divergence.
 

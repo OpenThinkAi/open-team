@@ -20,7 +20,7 @@ export function buildTelemetryCommand(): Command {
       "Aggregate runs.jsonl by phase × model (count, mean wall-clock, mean tokens)",
     )
     .option("--days <n>", "Only include runs from the last N days", parsePositiveInt)
-    .option("--phase <name>", "Filter by phase (product|spike|implementation|qa)")
+    .option("--phase <name>", "Filter by phase (product|spike|implementation)")
     .option("--model <id>", "Filter by resolved model id")
     .action(
       (opts: { days?: number; phase?: string; model?: string }) => {
@@ -67,7 +67,7 @@ export function buildTelemetryCommand(): Command {
     .command("record", { hidden: true })
     .description("(internal) Record one phase's telemetry line")
     .requiredOption("--ticket <id>", "Ticket id (e.g. AGT-108)")
-    .requiredOption("--phase <name>", "Phase name (product|spike|implementation|qa)")
+    .requiredOption("--phase <name>", "Phase name (product|spike|implementation)")
     .requiredOption("--model <id>", "Resolved model id the subagent ran on")
     .requiredOption("--session <uuid>", "Session UUID from the oteam:assignment block")
     .requiredOption("--started-at <iso>", "ISO timestamp from the oteam:assignment block (prep time)")

@@ -54,7 +54,6 @@ describe("oteam init — workspace bootstrap", () => {
       "tickets/triage",
       "tickets/refined",
       "tickets/in-progress",
-      "tickets/qa",
       "tickets/blocked",
       "projects",
       "archive",
@@ -312,7 +311,6 @@ describe("oteam init — default per-phase models (AGT-106)", () => {
     setModel("product", "claude-haiku-4-5");
     setModel("spike", "claude-opus-4-6");
     setModel("implementation", "claude-haiku-4-5");
-    setModel("qa", "claude-haiku-4-5");
     const customised = getModels();
 
     const result = await runInit({ yes: true });

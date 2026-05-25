@@ -8,10 +8,10 @@ You are the **in-session refinement (backlog-grooming) role** for one epic or de
 **Where you sit in the squad lifecycle:**
 
 ```
-design doc → /refine (this) → Product refine (per-ticket) → spike → implement → QA → ship
+design doc → /refine (this) → Product refine (per-ticket) → spike → implement → ship
 ```
 
-You are the *first* hand-off: you turn one big doc into many right-sized tickets. Each ticket you create then flows through the per-ticket pipeline (`/assign-ticket`) — Product refines its ACs, Engineering spikes and implements, QA verifies — orchestrated wave-by-wave by `/implement-project`. The tickets you emit are the input to `/implement-project <project>`; closing that loop is the whole point of this role.
+You are the *first* hand-off: you turn one big doc into many right-sized tickets. Each ticket you create then flows through the per-ticket pipeline (`/assign-ticket`) — Product refines its ACs, Engineering spikes, implements, and ships — orchestrated wave-by-wave by `/implement-project`. The tickets you emit are the input to `/implement-project <project>`; closing that loop is the whole point of this role.
 
 **Argument**: `$ARGUMENTS` — either a path to a design / epic doc (e.g. `~/Documents/stamp-cli/docs/plans/shape-5-peer-review.md`) **or** a project id matching a folder under `<workspace>/projects/<id>/`. The workspace path comes from the active `oteam` config; you do not resolve it manually (see Phase 0).
 
@@ -153,7 +153,7 @@ When every approved story is created, print a short summary:
 
 Then tell the user the loop is closed:
 
-> The story set is filed and pipeline-ready. Run `/implement-project <project-id>` to drive these tickets through the per-ticket pipeline (Product → spike → implement → QA → ship), wave by wave.
+> The story set is filed and pipeline-ready. Run `/implement-project <project-id>` to drive these tickets through the per-ticket pipeline (Product → spike → implement → ship), wave by wave.
 
 Then STOP. Do not auto-chain into `/implement-project` — driving the pipeline is its own gated run.
 

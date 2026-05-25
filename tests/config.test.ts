@@ -435,10 +435,10 @@ describe("config: per-phase models (AGT-105)", () => {
 
   it("each phase resolves independently — pinning one does not affect others", () => {
     cfg.setModel("spike", "claude-opus-4-7");
-    cfg.setModel("qa", "claude-sonnet-4-6");
+    cfg.setModel("implementation", "claude-sonnet-4-6");
     assert.deepEqual(cfg.getModels(), {
       spike: "claude-opus-4-7",
-      qa: "claude-sonnet-4-6",
+      implementation: "claude-sonnet-4-6",
     });
   });
 
@@ -454,16 +454,16 @@ describe("config: per-phase models (AGT-105)", () => {
 
   it("clearModel removes one phase but leaves the others intact", () => {
     cfg.setModel("spike", "claude-opus-4-7");
-    cfg.setModel("qa", "claude-sonnet-4-6");
+    cfg.setModel("implementation", "claude-sonnet-4-6");
     const after = cfg.clearModel("spike");
-    assert.deepEqual(after, { qa: "claude-sonnet-4-6" });
-    assert.deepEqual(cfg.getModels(), { qa: "claude-sonnet-4-6" });
+    assert.deepEqual(after, { implementation: "claude-sonnet-4-6" });
+    assert.deepEqual(cfg.getModels(), { implementation: "claude-sonnet-4-6" });
   });
 
   it("clearModel on an unset phase is a no-op", () => {
-    cfg.setModel("qa", "claude-sonnet-4-6");
+    cfg.setModel("implementation", "claude-sonnet-4-6");
     const after = cfg.clearModel("product");
-    assert.deepEqual(after, { qa: "claude-sonnet-4-6" });
+    assert.deepEqual(after, { implementation: "claude-sonnet-4-6" });
   });
 
   it("setModel rewrites in place when the same phase is set twice", () => {
@@ -555,7 +555,6 @@ describe("config: seedDefaultModelsIfEmpty (AGT-106)", () => {
     cfg.setModel("product", "claude-haiku-4-5");
     cfg.setModel("spike", "claude-opus-4-6");
     cfg.setModel("implementation", "claude-haiku-4-5");
-    cfg.setModel("qa", "claude-haiku-4-5");
     const before = cfg.getModels();
     const result = cfg.seedDefaultModelsIfEmpty();
     assert.equal(result.action, "preserved");

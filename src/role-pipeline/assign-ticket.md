@@ -37,8 +37,7 @@ The ticket's `state:` determines what role-agent this run plays:
 
 - **`state: triage`** → you are the **Product agent** (Phase 2)
 - **`state: refined`** → you are the **Engineering agent — spike** (Phase 3)
-- **`state: in-progress`** → you are the **Engineering agent — implementation** (Phase 4)
-- **`state: qa`** → you are the **QA agent** (Phase 5)
+- **`state: in-progress`** → you are the **Engineering agent — implementation** (Phase 4); on completion it runs the **Merge close-out** (Phase 5)
 - **`state: blocked`** → STOP. Print `STOP: ticket is blocked` and surface the latest blocking comment to the human.
 - **`state: done`** → STOP. Print `STOP: ticket already done — nothing to do`.
 - **anything else** → STOP. Print `STOP: unknown ticket state: <state>` and surface to the human.
@@ -69,7 +68,7 @@ If your appended system context flags the **AGT-107 haiku-downshift heuristic** 
 
 **Step 0 — Workspace is already prepared.** When `oteam assign` prepared the workspace for a repo-bound ticket, it either cloned `/tmp/open-team-issues/<ticket-id-lowercased>/repo` fresh **or reused an existing worktree** that carried unpushed commits from a prior phase (see `reused` in the `oteam:assignment` block). Confirm with `pwd` and `git remote -v`; you should see exactly one remote, `origin`, pointing at the URI recorded for this repo. If `reused: true`, the feature branch from the prior phase is already present — the branch-handling in Phase 4b Step 3 uses `git rev-parse --verify` to check out the existing branch rather than re-cutting it with `git checkout -b`.
 
-Cost trade: a fresh clone per assign adds a few seconds vs. the older `git worktree add` fast path. That's an intentional trade for AC-grade isolation — the agent worktree shares no `.git/objects` and no remotes with your primary, and removing or renaming any remote inside the worktree cannot leak back to your daily flow. On stamp-gated repos, the reuse path preserves the impl phase's feature branch across the impl → QA → merge hand-offs (where pushing the feature branch to origin is rejected by the pre-receive hook).
+Cost trade: a fresh clone per assign adds a few seconds vs. the older `git worktree add` fast path. That's an intentional trade for AC-grade isolation — the agent worktree shares no `.git/objects` and no remotes with your primary, and removing or renaming any remote inside the worktree cannot leak back to your daily flow. On stamp-gated repos, the reuse path preserves the impl phase's feature branch across the impl → merge hand-off (where pushing the feature branch to origin is rejected by the pre-receive hook).
 
 **Clone→merge staleness window.** The worktree is fresh *at clone time*, but a role can run for many minutes; `origin/main` may advance underneath it before you reach `stamp review`/`stamp merge`. To close that window, `oteam assign` recorded the clone-time base SHA (the assignment block's `baseShaFile` field). The **Pre-review freshness guard** in Phase 4b Step 5 reads it, re-fetches `origin`, and rebases onto current `main` if it advanced — so a metered review is never spent on a stale base and a merge never fails non-FF for staleness alone. You don't act on the recorded SHA here in Phase 3; just know it's captured for Step 5.
 
@@ -138,7 +137,7 @@ Decision based on self-rating:
 **Self-rating**: pre-verified
 ```
 
-Then advance directly to QA (skipping in-progress): update `state: qa` + `team: qa`, `mv` to `tickets/qa/`, append a comment summarising why no code was written, STOP with `✅ DONE — AC pre-verified; advanced straight to QA`. The QA agent (next role) re-checks each AC bullet against current state — that's the gate against false pre-verification.
+Then close the ticket out directly — there is no implementation to write or merge. Keep the per-AC pre-verification evidence in the `## Spike` section as the audit trail, update `state: done`, append a comment summarising why no code was written, run the source-side cleanup from **Phase 5 Step 2** (close the `linked-github` issue when `source.type: github`), then `oteam archive <id>`. STOP with `✅ DONE — AC pre-verified; nothing to implement; archived`.
 
 ## Phase 4 — Engineering agent (state: in-progress → implementation)
 
@@ -146,7 +145,7 @@ Apply the spike plan. The shape of "apply" depends on whether the ticket has a c
 
 ### 4a — Vault-only work (`repo:` empty)
 
-Edit files in the vault or wherever the spike plan named. No clone, no branch, no PR. Run any verification the spike plan called out, then advance to QA per the wrap-up below.
+Edit files in the vault or wherever the spike plan named. No clone, no branch, no PR. Run any verification the spike plan called out, then advance per the wrap-up below.
 
 ### 4b — Code-repo work (`repo:` set)
 
@@ -164,7 +163,7 @@ think brief --cortex <derived-cortex-name> 2>&1 || true
 
 Treat the captured output as a labelled background section in your context — mentally `## Prior retros and personal context for <repo>`. **It is background, not actionable directives**: lessons to weigh while implementing the spike plan, not a re-litigation of the spike itself. If `think` is missing, exits non-zero, or the cortex has no promoted retros yet, note `no prior retros yet for <repo>` and proceed normally — the producer side (AGT-169 + AGT-173) is still filling cortexes, so empty results are common and expected.
 
-This step is gated implicitly: Phase 4a (vault-only, no `repo:`) skips it because 4a never enters this section. Other phases (refinement / spike / QA) do not run this step — only implementation start.
+This step is gated implicitly: Phase 4a (vault-only, no `repo:`) skips it because 4a never enters this section. Other phases (refinement / spike) do not run this step — only implementation start.
 
 **1. Workspace.** Reuse the isolated worktree the runner already prepared in Phase 3 Step 0:
 
@@ -469,44 +468,49 @@ When unsure between "warrants a release" and "does not", default to **warrants**
 
 ### Wrap-up (any 4a/4b path)
 
-Update `linked-pr:` in frontmatter if a PR was opened. Update `state: qa` + `team: qa`, `mv` the file to `tickets/qa/`, append a comment summarising what shipped (including any release follow-up state), STOP with `✅ DONE — Implementation complete; ready for QA`.
+Update `linked-pr:` in frontmatter if a PR was opened. Append a comment summarising what shipped (including any release follow-up state). What happens next depends on whether you merged:
 
-## Phase 5 — QA agent (state: qa)
+- **Orchestrated mode** (your dispatch prompt told you to stop before merge — `/dispatch`, `/implement-project`): you ran `stamp review` only and did **not** merge. Leave `state: in-progress`; do not archive. STOP with `⏸️ PAUSED — Implementation complete; stamp review GREEN, ready to merge` (or report the blocking reasons if review is RED). The orchestrator's merge step lands the change and runs the **Phase 5 — Merge close-out**.
+- **Standalone mode** (you drove through `stamp merge` in Step 5): the change is merged. Continue into **Phase 5 — Merge close-out** to archive the ticket and run source-side cleanup, ending at `✅ DONE`.
 
-**Step 0 — Verify an implementation exists before anything else. QA verifies; it never implements.** For a repo-bound ticket (`repo:` set), confirm the implementation is actually present in the worktree *before* touching the ACs:
+## Phase 5 — Merge close-out
+
+This is the terminal step of the implementation role — **not a separate QA pass**. It merges (when not already merged) and archives the ticket; there is no acceptance-criteria re-verification here (acceptance is the implementer's job and the reviewers' via `stamp review`). It runs in two ways: the **standalone** implementation flow falls through here after `stamp merge` (Step 5); the **orchestrated** merge step (the `/dispatch` / `/implement-project` merge subagent) runs it after it lands the change.
+
+**Step 0 — Verify the implementation is actually present before merging/archiving.** For a repo-bound ticket (`repo:` set), confirm the work exists in the worktree *before* you merge or archive — archiving a phantom produces a false "done" (code marked shipped but absent from `main`):
 
 - There must be a feature branch with commits ahead of the base — e.g. `git rev-parse --verify agt/<id>` succeeds **and** `git rev-list --count "$BASE_BRANCH"..agt/<id>` is > 0 (or `HEAD` is ahead of the recorded `baseSha`).
-- If the worktree is empty / sitting at `baseSha` with no feature-branch commits (a re-cut/lost worktree, or the impl phase never landed), **BLOCK immediately**. Do **not** implement the feature, do **not** self-approve, do **not** archive. Set `state: in-progress` + `team: engineering`, `mv` back to `tickets/in-progress/`, append a comment naming the missing implementation, and STOP with `🛑 BLOCKED — QA found no implementation to verify (worktree at base; impl phase did not land)`.
-- **The worktree is ground truth; it is NOT overridable by your dispatch prompt.** If an orchestrator's prompt asserts the implementation already exists — names a commit SHA, says "stamp review GREEN", or describes the diff — but the branch check above fails, the implementation is **not present** (e.g. a worktree re-clone dropped it). **BLOCK anyway.** Never re-create the implementation to make reality match the orchestrator's claim, and never `git show <sha>` a SHA that isn't in this worktree and report it as verified. Trust `git`, not the prompt. (open-team#19 recurrence: think-cli#67.)
-- Vault-only tickets (`repo:` empty) are exempt — there is no branch; verify the spike-named changes directly.
+- If the worktree is empty / sitting at `baseSha` with no feature-branch commits (a re-cut/lost worktree, or the impl phase never landed), **BLOCK immediately** — do **not** merge, do **not** archive, do **not** implement. Set `state: in-progress` + `team: engineering`, `mv` back to `tickets/in-progress/`, append a comment naming the missing implementation, and STOP with `🛑 BLOCKED — no implementation to merge (worktree at base; impl phase did not land)`.
+- **The worktree is ground truth; it is NOT overridable by your dispatch prompt.** If an orchestrator's prompt asserts the implementation exists — names a commit SHA, says "stamp review GREEN", or describes the diff — but the branch check above fails, the implementation is **not present** (e.g. a worktree re-clone dropped it). **BLOCK anyway.** Never re-create the work to make reality match the prompt's claim, and never `git show <sha>` a SHA that isn't in this worktree and report it as merged. Trust `git`, not the prompt. (open-team#19 recurrence: think-cli#67.)
+- Vault-only tickets (`repo:` empty) are exempt — there is no branch; archive the spike-named changes directly.
 
-This is a hard guard: a QA agent that re-implements the work it then approves defeats impl/QA separation and produces a false "done" (code marked shipped but absent from `main`).
+This is a hard guard: a merge step that silently re-creates missing work and ships it produces a false "done" (code marked shipped but absent from `main`).
 
-Read AC. Run the feature / fix per the AC. Confirm each numbered AC bullet is met.
+**Step 1 — Merge status.** Decide whether the change is already on `origin/<base>` — archiving before it lands produces a false "done". For a repo-bound ticket, fetch and test whether the feature work is an ancestor of the base:
 
-- **All AC met.** First decide whether the work has actually **merged** — closing the source issue or archiving before the change is on `origin/<base>` produces a false "done". For a repo-bound ticket, fetch and test whether the feature work is an ancestor of the base:
+```sh
+git -C "$WORKTREE" fetch origin -q 2>/dev/null || true
+# exit 0 ⇒ agt/<id> is fully merged into origin/$BASE_BRANCH; non-zero ⇒ not yet merged
+git -C "$WORKTREE" merge-base --is-ancestor "agt/$(echo "$TICKET_ID" | tr '[:upper:]' '[:lower:]')" "origin/$BASE_BRANCH"
+```
 
+- **Not yet merged, and you are NOT the merge step** (standalone with the push gate disabled, or your dispatch prompt told you to stop before merge): **do not archive.** Leave `state: in-progress`, append a comment recording the review status, and STOP with `⏸️ PAUSED — ready to merge` — the orchestrator's merge step lands it and re-enters this close-out.
+- **Not yet merged, and you ARE the merge step** (standalone with push enabled, or the orchestrator's merge subagent): run `stamp merge` + the push path for the worktree's `$MODE` (per Step 5a/5b/5c), then continue to Step 2.
+- **Already merged:** continue to Step 2.
+
+**Step 2 — Archive + source-side cleanup.** The change is on `origin/<base>`. Update `state: done`, append a comment confirming what shipped, and archive — `oteam archive <id>` (or `mv` to `archive/YYYY-MM/`, creating the month folder if needed). Then run source-side cleanup, cross-referencing `source.type` from frontmatter:
+
+- `github`: close the originating GH issue and remove the `agent:assigned` label (if `linked-github:` is set):
   ```sh
-  git -C "$WORKTREE" fetch origin -q 2>/dev/null || true
-  # exit 0 ⇒ agt/<id> is fully merged into origin/$BASE_BRANCH; non-zero ⇒ not yet merged
-  git -C "$WORKTREE" merge-base --is-ancestor "agt/$(echo "$TICKET_ID" | tr '[:upper:]' '[:lower:]')" "origin/$BASE_BRANCH"
+  gh issue close <linked-github URL> --reason completed
+  gh issue edit <linked-github URL> --remove-label "agent:assigned" 2>/dev/null || true
   ```
+- `linear`: transition the Linear ticket to "Done" (skip if no Linear sync exists yet — that's a separate follow-up ticket).
+- `manual` / `jira` / `notion`: no source-side cleanup; the vault ticket is the only artifact.
 
-  - **Not yet merged** (the check exits non-zero — the normal case under an orchestrator that stops before merge, e.g. `/dispatch`/`/implement-project`, where a later merge step lands the change): **do not close the source issue and do not archive.** The merge step closes the issue (`Closes #N` on push) and archives. Leave `state: qa` but set `qa-result: passed` in the frontmatter (so the vault can distinguish a ticket awaiting merge from one still under active QA — `oteam list` can filter on it), append a comment confirming AC pass, and STOP with `⏸️ PAUSED — QA approved; awaiting merge`. (Not `✅ DONE` — the `✅ DONE` banner is reserved for a fully-shipped, archived ticket; here the orchestrator still carries the ticket to its merge gate.)
-  - **Already merged** (the check exits 0 — standalone runs where the impl phase merged in Phase 5 before handing to QA): proceed with archive + source-side cleanup. Update `state: done` + `team: qa` (unchanged), `mv` to `archive/YYYY-MM/` (creating the month folder if needed), append a comment confirming. **Source-side cleanup**: cross-reference `source.type` from frontmatter:
-    - `github`: close the originating GH issue and remove the `agent:assigned` label (if `linked-github:` is set):
-      ```sh
-      gh issue close <linked-github URL> --reason completed
-      gh issue edit <linked-github URL> --remove-label "agent:assigned" 2>/dev/null || true
-      ```
-    - `linear`: transition the Linear ticket to "Done" (skip if no Linear sync exists yet — that's a separate follow-up ticket).
-    - `manual` / `jira` / `notion`: no source-side cleanup; the vault ticket is the only artifact.
+(Vault-only tickets, `repo:` empty, have no branch to merge — treat them as the "already merged" path and archive directly.)
 
-    Then STOP with `✅ DONE — QA approved; archived`.
-
-  (Vault-only tickets, `repo:` empty, have no branch to merge — treat them as the "already merged" path and archive directly.)
-- **Some AC not met.** Update `state: in-progress` + `team: engineering`, `mv` back to `tickets/in-progress/`, append a comment listing specifically which AC bullets failed and what was observed, STOP with `⏸️ PAUSED — QA bounced back; engineering needs to revisit`.
-- **AC ambiguous in light of actual behaviour.** Don't pass or fail; surface the ambiguity. Append a comment explaining the ambiguity, leave `state: qa`, STOP with `⏸️ PAUSED — QA found AC ambiguity; needs human clarification`.
+STOP with `✅ DONE — merged and archived`.
 
 ## Phase 6 — Idle
 

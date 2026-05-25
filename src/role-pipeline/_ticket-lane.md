@@ -128,21 +128,17 @@ as auto-approved (still vetoable). On approval: append a
 `### YYYY-MM-DD — Plan approved` comment, set `state: in-progress`, move the file to
 `tickets/in-progress/`.
 
-### L2 — Implementation + QA
+### L2 — Implementation
 
 Run the core subroutine for the **implementation** role (subagent implements, tests
 **against its prepared worktree**, runs `stamp review`, but **stops before
-`stamp merge`**), then the **QA** role against the worktree. Interpret:
+`stamp merge`**). Interpret:
 
-- Implementation `ready to merge` (stamp review GREEN) + QA
-  `⏸️ PAUSED — QA approved; awaiting merge`: carry into the merge gate. (Under an
-  orchestrator that stops before merge, this is QA's success marker — it has
-  verified the ACs but deliberately did **not** close the issue or archive, since
-  the merge step does that. A `✅ DONE — QA approved; archived` only appears on a
-  standalone run where the impl phase already merged.)
+- Implementation `⏸️ PAUSED — Implementation complete; stamp review GREEN, ready to
+  merge`: carry into the merge gate. (Under an orchestrator that stops before merge,
+  the implementation deliberately did **not** close the issue or archive — the merge
+  step does that, via the skill's Phase 5 close-out.)
 - Stamp review RED after the skill's review-round rule: surface the blocking reasons.
-- QA `changes_requested`: re-dispatch implementation with the QA feedback noted in a
-  comment (respect the 3-attempt cap).
 - Any architectural surprise in the diff: surface (exception).
 
 ### GATE-POINT 2 — MERGE GATE

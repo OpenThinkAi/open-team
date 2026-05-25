@@ -52,7 +52,7 @@ body
 
 function seed(): { root: string; cleanup: () => void } {
   const root = mkdtempSync(join(tmpdir(), "doctor-"));
-  for (const s of ["triage", "refined", "in-progress", "qa"]) {
+  for (const s of ["triage", "refined", "in-progress", "blocked"]) {
     mkdirSync(join(root, "tickets", s), { recursive: true });
   }
   mkdirSync(join(root, "archive", "2026-05"), { recursive: true });
@@ -193,7 +193,7 @@ describe("oteam doctor --fix", () => {
       write(root, "projects/open-team/README.md", projectReadme("open-team", "in-progress"));
       write(root, "tickets/triage/AGT-010-done.md", ticket("AGT-010", "done"));
       write(root, "tickets/triage/AGT-011-mismatch.md", ticket("AGT-011", "refined"));
-      write(root, "tickets/archive/2026-05/AGT-012-ghost.md", ticket("AGT-012", "qa"));
+      write(root, "tickets/archive/2026-05/AGT-012-ghost.md", ticket("AGT-012", "in-progress"));
 
       const result = runDoctor({ vault: root, fix: true });
 
