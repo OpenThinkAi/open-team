@@ -68,7 +68,7 @@ Decompose the doc into stories. For **each** story, decide:
 - **`repo:`** — the `owner/name` slug this story's code lands in. If the whole epic is one repo, every story shares it; multi-repo epics get per-story repos. If a story is vault-only (no code), leave the repo unset and say so.
 - **Dependencies** — which *other stories in this set* must merge before this one can start. Express as a chain or DAG (e.g. `4a → 4b → … → 4h`, or `4c depends on 4a and 4b`). Infer these from the doc's phase ordering and from data/contract flow (a story that consumes an API the prior story defines depends on it). Do **not** invent dependencies that aren't real — over-linking serializes work the pipeline could otherwise parallelize.
 
-Right-size the stories: each should be one coherent, independently-reviewable change — roughly one pipeline pass. If a "story" is really three changes, split it; if two "stories" can't be reviewed apart, merge them.
+Right-size the stories, **erring small**: each should be the *smallest* coherent, independently-reviewable change — at most one pipeline pass, ideally less. When in doubt, split. This isn't just review ergonomics: small diffs let the per-ticket `stamp review` run on the **local** model (unmetered, fast, and reliable on a small diff), whereas large or cross-cutting diffs degrade local-model review and force the metered Anthropic backend (see the dispatch/lane review-backend policy). So bias toward smaller stories — split a "story" that is really two or three changes; only merge two stories when they genuinely can't be reviewed apart.
 
 Topologically sort the set so you have a creation order where every story's dependencies come before it (Phase 3 needs this order).
 
