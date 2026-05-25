@@ -9,10 +9,10 @@ Source-agnostic workspace-driven role pipeline for driving Claude agents against
 Requires Node `>=22.5.0`.
 
 ```sh
-npm install -g @openthink/team   # once published; see "Status" below
+npm install -g @openthink/team
 ```
 
-Until then, install from a local clone:
+Or install from a local clone for development:
 
 ```sh
 git clone git@github.com:OpenThinkAi/open-team.git
@@ -24,7 +24,7 @@ npm link
 
 ## Status
 
-`v0` is **private and not yet published to npm** (`package.json` has `"private": true`). Flip when the source repo goes public.
+`@openthink/team` is **published to npm** — latest `1.2.0`, installable via the [Install](#install) section above. New versions publish automatically when a reviewed version bump lands on `main`; see [Releases](#releases) for the release ritual and the publish gate.
 
 ## Quick start
 
@@ -285,6 +285,19 @@ Migration steps:
 2. Either set `PRODUCT_VAULT_PATH` if your workspace isn't at `~/Documents/product-vault`, or register it via `oteam config workspace add <path>` (see [Config & multiple workspaces](#config--multiple-workspaces)).
 3. Delete `~/Library/Application Support/AgenticDesktop/vault-assignments.json` (panel-indicator state, no longer used).
 4. Use `oteam pull github <ref>` instead of clicking "Assign to agent" on the Issues panel.
+
+## Releases
+
+Releases go through the **same stamp-reviewed flow as any other change** — there are no unsigned direct release commits on `main`. To cut a release:
+
+1. From an up-to-date `main`, branch `release/vX.Y.Z` (next patch unless a larger bump is warranted).
+2. Bump `version` in `package.json`, refresh `package-lock.json` (`npm install`), commit.
+3. `stamp review --diff main..release/vX.Y.Z` → fix to green → `stamp status --diff main..release/vX.Y.Z` (gate open).
+4. `git checkout main && stamp merge release/vX.Y.Z --into main && stamp push main`.
+
+Publishing is automatic: [`.github/workflows/publish.yml`](.github/workflows/publish.yml) runs on every push to `main` and publishes to npm via **Trusted Publishing (OIDC — no `NPM_TOKEN`)** when, and only when, `package.json`'s `version` is not already on the registry. The deliberate gate on a publish is therefore the **reviewed version bump** in step 2 — a publish cannot happen without one landing through stamp review. A push to `main` that doesn't change the version is a no-op for the publish job. (If `package.json` ever carries `"private": true`, the workflow no-ops entirely.)
+
+The role pipeline automates steps 1–4 as **Phase 4.5 (Release follow-up)** in [`src/role-pipeline/assign-ticket.md`](src/role-pipeline/assign-ticket.md) for any open-team ticket whose change is user-facing.
 
 ## Development
 
