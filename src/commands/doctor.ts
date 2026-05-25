@@ -24,6 +24,12 @@ export interface DoctorIssue {
   severity: "error" | "warning";
   /** Path relative to the vault root (file, or project dir for project issues). */
   path: string;
+  /**
+   * Populated only for multi-path classes (duplicate-id): all vault-relative
+   * paths involved. `path` stays a single resolvable path (the first) so
+   * consumers can treat it uniformly.
+   */
+  paths?: string[];
   id?: string;
   message: string;
   fixable: boolean;
@@ -139,7 +145,7 @@ export function runDoctor(opts: DoctorOptions = {}): DoctorResult {
           severity: "warning",
           path: rel(file),
           id: parsed.id,
-          message: `blank repo: but project "${parsed.project}" declares repos (${proj.repos.join(", ")})`,
+          message: `repo is blank — project "${parsed.project}" declares repos [${proj.repos.join(", ")}]`,
           fixable: false,
         });
       }
@@ -159,7 +165,8 @@ export function runDoctor(opts: DoctorOptions = {}): DoctorResult {
       issues.push({
         class: "duplicate-id",
         severity: "error",
-        path: paths.map(rel).join(", "),
+        path: rel(paths[0]!),
+        paths: paths.map(rel),
         id,
         message: `${id} is used by ${paths.length} files — IDs must be unique across the vault`,
         fixable: false,
@@ -264,7 +271,13 @@ function formatHuman(result: DoctorResult, fixMode: boolean): string {
     for (const issue of list) {
       const icon = issue.fixed ? "✓ fixed" : issue.severity === "error" ? "✗" : "⚠";
       const idPart = issue.id ? `${issue.id} ` : "";
-      lines.push(`  ${icon} ${idPart}${issue.path}`);
+      const fixTag = !issue.fixed && issue.fixable ? " (fixable)" : "";
+      if (issue.paths && issue.paths.length > 1) {
+        lines.push(`  ${icon} ${idPart}(${issue.paths.length} files)${fixTag}`);
+        for (const p of issue.paths) lines.push(`        ${p}`);
+      } else {
+        lines.push(`  ${icon} ${idPart}${issue.path}${fixTag}`);
+      }
       lines.push(`        ${issue.message}`);
     }
   }

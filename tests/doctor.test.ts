@@ -125,7 +125,10 @@ describe("oteam doctor — detection", () => {
       write(root, "projects/open-team/README.md", projectReadme("open-team", "in-progress"));
       write(root, "tickets/triage/AGT-005-live.md", ticket("AGT-005", "triage"));
       write(root, "archive/2026-05/AGT-005-old.md", ticket("AGT-005", "done"));
-      assert.ok(classes(root).includes("duplicate-id"));
+      const dup = runDoctor({ vault: root }).issues.find((i) => i.class === "duplicate-id");
+      assert.ok(dup, "duplicate-id reported");
+      assert.equal(dup!.paths?.length, 2, "both paths captured in paths[]");
+      assert.ok(!dup!.path.includes(", "), "path stays a single resolvable path");
     } finally {
       cleanup();
     }
