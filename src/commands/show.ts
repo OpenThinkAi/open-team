@@ -17,6 +17,7 @@ const SHOWN_FIELDS = [
   "title",
   "state",
   "team",
+  "project",
   "repo",
   "linked-github",
   "linked-pr",
@@ -67,8 +68,12 @@ function resolveTicketPath(vaultPath: string, idOrPath: string): string {
  * last `###` heading is newest. Returns null when there are no comments.
  */
 function lastComment(raw: string): string | null {
+  // Scope strictly to the Comments section. Without this guard, body sections
+  // (Problem Statement, Spike, …) that use `###` subheadings would be
+  // misread as comments.
   const commentsIdx = raw.indexOf("\n## Comments");
-  const region = commentsIdx >= 0 ? raw.slice(commentsIdx) : raw;
+  if (commentsIdx < 0) return null;
+  const region = raw.slice(commentsIdx);
   const headings = [...region.matchAll(/^### .*$/gm)];
   if (headings.length === 0) return null;
 

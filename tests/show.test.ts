@@ -67,6 +67,42 @@ describe("runShow", () => {
     }
   });
 
+  it("shows the project field", () => {
+    const { root, cleanup } = seed();
+    try {
+      const out = runShow({ vault: root, idOrPath: "AGT-077" });
+      assert.match(out, /project\s+open-team/);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("returns no comment when the ticket has body ### but no ## Comments", () => {
+    const root = mkdtempSync(join(tmpdir(), "vault-show-nc-"));
+    try {
+      mkdirSync(join(root, "tickets", "triage"), { recursive: true });
+      const body = `---
+id: AGT-055
+title: "No comments yet"
+state: triage
+---
+
+## Problem Statement
+
+### A body subheading that must not be mistaken for a comment
+
+text
+`;
+      writeFileSync(join(root, "tickets", "triage", "AGT-055-x.md"), body);
+      const out = runShow({ vault: root, idOrPath: "AGT-055" });
+      assert.match(out, /id\s+AGT-055/);
+      // the body ### must NOT be surfaced as a comment
+      assert.doesNotMatch(out, /A body subheading/);
+    } finally {
+      rmSync(root, { recursive: true });
+    }
+  });
+
   it("omits empty frontmatter fields (linked-pr)", () => {
     const { root, cleanup } = seed();
     try {
