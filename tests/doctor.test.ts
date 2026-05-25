@@ -1,6 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runDoctor, type IssueClass } from "../src/commands/doctor.ts";
@@ -221,6 +228,35 @@ describe("oteam doctor --fix", () => {
           c === "state-folder-mismatch",
       );
       assert.deepEqual(after, []);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("flags a legacy qa-state ticket and --fix migrates it to in-progress", () => {
+    const { root, cleanup } = seed();
+    try {
+      write(root, "tickets/triage/AGT-020-legacy.md", ticket("AGT-020", "qa"));
+      const issue = runDoctor({ vault: root }).issues.find(
+        (i) => i.class === "legacy-qa-state",
+      );
+      assert.ok(issue, "expected a legacy-qa-state issue");
+      assert.equal(issue!.severity, "error");
+
+      const fixed = runDoctor({ vault: root, fix: true });
+      assert.equal(
+        fixed.issues.find((i) => i.class === "legacy-qa-state")?.fixed,
+        true,
+      );
+      assert.ok(
+        existsSync(join(root, "tickets/in-progress/AGT-020-legacy.md")),
+        "migrated into tickets/in-progress/",
+      );
+      const migrated = readFileSync(
+        join(root, "tickets/in-progress/AGT-020-legacy.md"),
+        "utf8",
+      );
+      assert.match(migrated, /^state: in-progress$/m);
     } finally {
       cleanup();
     }

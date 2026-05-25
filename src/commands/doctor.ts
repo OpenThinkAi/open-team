@@ -14,6 +14,7 @@ export type IssueClass =
   | "ghost-archive"
   | "done-unarchived"
   | "state-folder-mismatch"
+  | "legacy-qa-state"
   | "duplicate-id"
   | "malformed-frontmatter"
   | "missing-repo"
@@ -124,6 +125,16 @@ export function runDoctor(opts: DoctorOptions = {}): DoctorResult {
         message: `state: done but still in tickets/${folder}/ — should be archived`,
         fixable: true,
       });
+    } else if (parsed.state === "qa" || folder === "qa") {
+      issues.push({
+        class: "legacy-qa-state",
+        severity: "error",
+        path: rel(file),
+        id: parsed.id,
+        message:
+          '"qa" is no longer a pipeline state (the QA step was removed) — migrate to in-progress',
+        fixable: true,
+      });
     } else if (folder && VALID_STATE.has(folder) && parsed.state !== folder) {
       issues.push({
         class: "state-folder-mismatch",
@@ -205,6 +216,8 @@ export function runDoctor(opts: DoctorOptions = {}): DoctorResult {
       try {
         if (issue.class === "ghost-archive" || issue.class === "done-unarchived") {
           archiveFile(vault, abs);
+        } else if (issue.class === "legacy-qa-state") {
+          migrateState(vault, abs, "in-progress");
         } else if (issue.class === "state-folder-mismatch") {
           const parsed = parseTicket(abs);
           if (parsed && VALID_STATE.has(parsed.state)) {
@@ -244,6 +257,14 @@ function archiveFile(vault: string, filePath: string): string {
   const target = join(dir, basename(filePath));
   renameSync(filePath, target);
   return target;
+}
+
+/** Rewrite a ticket's frontmatter state, then move it into tickets/<state>/.
+ * Used to migrate tickets stranded in a removed state (e.g. legacy `qa`). */
+function migrateState(vault: string, filePath: string, newState: string): string {
+  const raw = readFileSync(filePath, "utf8");
+  writeFileSync(filePath, raw.replace(/^state:.*$/m, `state: ${newState}`));
+  return moveToStateFolder(vault, filePath, newState);
 }
 
 /** Move a ticket file into tickets/<state>/ to match its frontmatter state. */
@@ -295,7 +316,7 @@ function formatHuman(result: DoctorResult, fixMode: boolean): string {
 export function buildDoctorCommand(): Command {
   return new Command("doctor")
     .description(
-      "Validate vault hygiene (state↔folder, ghost archives, duplicate IDs, done-but-unarchived, malformed/incomplete tickets, stale project status)",
+      "Validate vault hygiene (state↔folder, ghost archives, duplicate IDs, done-but-unarchived, legacy qa-state tickets, malformed/incomplete tickets, stale project status)",
     )
     .option("--fix", "Auto-correct the safe issue classes (moves files)")
     .option("--json", "Emit the report as JSON")

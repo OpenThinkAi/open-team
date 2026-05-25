@@ -122,6 +122,8 @@ Add a new source by writing one new `Ingestor` in `src/ingestors/<name>.ts` and 
 | `blocked`      | (stops, surfaces comment) |
 | `done`         | (stops)                   |
 
+> Earlier builds had a `qa` state/step between `in-progress` and `done`; it was removed (acceptance is the implementer's + reviewers' responsibility via `stamp review`). Migrate any lingering `state: qa` tickets with `oteam doctor --fix`, which moves them to `in-progress`.
+
 The pipeline body lives at `src/role-pipeline/assign-ticket.md` and is bundled into `dist/`. `oteam assign` (`src/role-pipeline/runner.ts`) installs the bundled body into every reachable Claude profile (`~/.claude/commands/`, `~/.claude-personal/commands/`, `$CLAUDE_CONFIG_DIR/commands/`, etc.) so an in-session agent can resolve `/assign-ticket`, then does the deterministic prep (claim the GH issue, clone the worktree, resolve the per-phase model, compose any system-prompt context) and prints an **assignment context** to stdout — a human summary plus a fenced ```` ```oteam:assignment ```` JSON block (`workspacePath`, `model`, `slashCommand`, `phase`, `envFiles`, …).
 
 `oteam assign` **does not run Claude.** An interactive Claude Code parent — typically the [`/implement-project`](src/role-pipeline/implement-project.md) orchestrator — parses that block and dispatches a **Task subagent** into the prepared worktree to run `/assign-ticket`. Because the parent is an interactive session, the subagent draws on your subscription, not the metered Agent SDK credit. (The `--inline` flag is accepted but a deprecated no-op — there is no longer anything to spawn.)
