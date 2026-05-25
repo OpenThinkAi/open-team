@@ -358,13 +358,44 @@ stamp status --diff "$BASE_BRANCH..$FEATURE_BRANCH"
 
 If the gate isn't open, iterate per the **5-round rule** (rounds 1–5; round 1 catches structure, round 2 consistency, round 3 polish; later rounds rare). Each round: classify findings as *iterable* (typos, naming, missing tests, doc updates, narrowly-scoped fixes) vs *immediate-STOP* (architectural pushback, scope expansion, unresolvable correctness/security claim). On any immediate-STOP finding, surface everything to the human — don't fix the iterables alone. After 5 rounds still red → STOP with `🛑 BLOCKED — Stamp review red after 5 rounds`.
 
-When the gate opens:
+When the gate opens, acquire the machine-wide merge lock, then merge. `stamp merge`
+re-runs the full required-check suite (e.g. the vitest fork-pool) against the merged
+tree; two suites running at once on the same machine starve each other's workers and
+flake the `test` check — which is what makes `stamp merge` withhold the push. The lock
+serializes merges across **all** dispatch/implement sessions. It is **self-healing**
+(a lock orphaned by a killed session is reclaimed) and **bounded** (never an unbounded
+wait):
 
 ```sh
+# --- machine-wide merge mutex (portable; no flock dependency on macOS) ---
+LOCK=/tmp/oteam-stamp-merge.lock
+waited=0
+while ! mkdir "$LOCK" 2>/dev/null; do
+  if kill -0 "$(cat "$LOCK/pid" 2>/dev/null)" 2>/dev/null; then
+    [ "$waited" -ge 1800 ] && { echo "🛑 BLOCKED — merge lock held >30m by a live session"; exit 1; }
+    sleep 10; waited=$((waited + 10))
+  else
+    rm -rf "$LOCK"   # holder is gone (killed/orphaned) — reclaim the lock
+  fi
+done
+echo $$ > "$LOCK/pid"
+trap 'rm -rf "$LOCK"' EXIT
+
 git checkout "$BASE_BRANCH"
-stamp merge "$FEATURE_BRANCH" --into "$BASE_BRANCH"
-stamp push "$BASE_BRANCH"
+if stamp merge "$FEATURE_BRANCH" --into "$BASE_BRANCH"; then
+  stamp push "$BASE_BRANCH"
+else
+  echo "🛑 BLOCKED — stamp merge withheld the push: a required_check failed (see output above). 'main' was NOT advanced and nothing was pushed."
+  exit 1   # releases the lock via the trap; counts against the 3-attempt cap
+fi
 ```
+
+**Never** follow `stamp merge` with an `until`/unbounded `git ls-remote origin` poll
+for the merge SHA — on a withheld push that SHA never lands and the loop hangs forever
+(the failure this guard exists to prevent). Branch on the exit code as above; that is
+the only correct signal. On the `🛑 BLOCKED — stamp merge withheld` path, surface to
+the caller; a retry (within the 3-attempt cap) is a **fresh, serialized** run of this
+whole block — it re-acquires the lock, so it can never race a concurrent merge.
 
 Then route by tier:
 
@@ -394,16 +425,38 @@ stamp status --diff "$FEATURE_BRANCH..$WORK_BRANCH"
 
 If the gate isn't open, iterate per the **5-round rule** (same shape as 5a — round 1 structure, round 2 consistency, round 3 polish; later rounds rare). Amend on `$WORK_BRANCH` between rounds. After 5 rounds still red → STOP with `🛑 BLOCKED — Local stamp review red after 5 rounds`.
 
-When the gate opens, merge locally and push the signed merge as the PR head:
+When the gate opens, merge locally and push the signed merge as the PR head. Acquire
+the same machine-wide merge mutex as 5a (so concurrent sessions don't starve each
+other's required-check suite) and **branch on `stamp merge`'s exit code** — a failed
+required_check must not push a half-built head or open a PR:
 
 ```sh
+# --- machine-wide merge mutex (same lock as 5a; self-healing + bounded) ---
+LOCK=/tmp/oteam-stamp-merge.lock
+waited=0
+while ! mkdir "$LOCK" 2>/dev/null; do
+  if kill -0 "$(cat "$LOCK/pid" 2>/dev/null)" 2>/dev/null; then
+    [ "$waited" -ge 1800 ] && { echo "🛑 BLOCKED — merge lock held >30m by a live session"; exit 1; }
+    sleep 10; waited=$((waited + 10))
+  else
+    rm -rf "$LOCK"
+  fi
+done
+echo $$ > "$LOCK/pid"
+trap 'rm -rf "$LOCK"' EXIT
+
 git checkout "$FEATURE_BRANCH"
-stamp merge "$WORK_BRANCH" --into "$FEATURE_BRANCH"
-git push -u origin "$FEATURE_BRANCH"
-gh pr create --base "$DEFAULT_BRANCH" --head "$FEATURE_BRANCH" --fill
-git branch -D "$WORK_BRANCH"
+if stamp merge "$WORK_BRANCH" --into "$FEATURE_BRANCH"; then
+  git push -u origin "$FEATURE_BRANCH"
+  gh pr create --base "$DEFAULT_BRANCH" --head "$FEATURE_BRANCH" --fill
+  git branch -D "$WORK_BRANCH"
+else
+  echo "🛑 BLOCKED — stamp merge withheld: a required_check failed (see output above). No PR head was pushed."
+  exit 1   # releases the lock via the trap; counts against the 3-attempt cap
+fi
 ```
 
+As in 5a, **never** poll `origin` for a merge SHA `stamp merge` did not produce.
 `stamp push` is intentionally absent — there is no stamp server. The signed merge commit is the PR head; reviewers can `stamp verify <pr-head-sha>` from any clone whose `.stamp/trusted-keys/` contains the signing key. Capture the PR URL into `linked-pr:`. Human merges through GitHub PR review. Never merge a GitHub PR yourself.
 
 Local-stamp is single-tier only — the PR base is always `$DEFAULT_BRANCH`. Two-tier (stacked-base) flows require a stamp server to hold the intermediate base branch and aren't supported in this mode.

@@ -64,6 +64,20 @@ Every role advance uses this three-step subroutine.
    dominates. Do **not** poll the background task with a timer — the completion
    re-invokes you automatically.)
 
+   **Exception — the merge subagent (GATE-POINT 2) runs in the FOREGROUND.** The
+   "backgrounding gives up nothing" reasoning holds for spike/impl (a single
+   ticket's pipeline is sequential), but it breaks at the merge step. `stamp merge`
+   is a long-lived child that itself spawns the required-check suite (e.g. a full
+   vitest fork-pool) and any smoke container. If a *background* merge subagent
+   returns early, flakes, or is retried under the 3-attempt cap, that `stamp merge`
+   child is **orphaned, not reaped** — and the retry then launches a *second*
+   `stamp merge` against the **same per-ticket worktree**, so two merges
+   `checkout`+merge+reset on top of each other and corrupt the base (observed:
+   four merge→reset cycles on one worktree, `origin/main` never advanced). Run the
+   merge subagent **foreground** so your turn owns the merge child's full lifecycle
+   and a retry can never overlap a still-running merge. See GATE-POINT 2 for the
+   reap-before-retry rule.
+
    Prompt template:
 
    > Working directory: `<workspacePath>`. `cd` there first; never read or write
@@ -145,11 +159,32 @@ Run the core subroutine for the **implementation** role (subagent implements, te
 
 **Caller-owned presentation.** Present the ready-to-merge ticket(s): one-paragraph
 summary, target branch, review status. After approval, dispatch a final **merge
-subagent** (core subroutine, but the instruction is: run `stamp merge` + the stamp
-push path per the skill's Phase 5, then archive). After it lands on `origin/main`,
-notify immediately: `🔔 AGT-XXX merged to <repo> as <sha>` + one sentence on what it
-did. If a stamp-merge succeeds but the GitHub mirror push is rejected, **SURFACE —
-never auto-reconcile** divergence.
+subagent** (core subroutine, but **foreground — `run_in_background: false`**, per the
+merge-phase exception in the core subroutine; the instruction is: run `stamp merge`
++ the stamp push path per the skill's Phase 5, then archive). After it lands on
+`origin/main`, notify immediately: `🔔 AGT-XXX merged to <repo> as <sha>` + one
+sentence on what it did. If a stamp-merge succeeds but the GitHub mirror push is
+rejected, **SURFACE — never auto-reconcile** divergence.
+
+**Merge-step failure handling (do not improvise).** `stamp merge` may exit non-zero
+and **withhold the push** when a required_check goes red — the merge commit is built
+locally but `main` is *not* advanced and *nothing* is pushed. This is a normal,
+expected outcome (e.g. a load-flaked test suite), not a special case to route around:
+
+- The merge subagent must **branch on `stamp merge`'s exit code** (§5a/§5c do this).
+  On a withheld push it STOPs with `🛑 BLOCKED — stamp merge withheld: required_check
+  '<name>' failed`, which counts against the **3-attempt cap**.
+- **Never poll `origin` for a merge SHA `stamp merge` did not push.** A withheld push
+  means that SHA will never appear; an `until`/unbounded `git ls-remote` wait hangs
+  forever. Any wait in the merge path must be **bounded** (timeout + the attempt cap).
+- **Reap before retry.** Because the merge subagent is foreground, its `stamp merge`
+  child has already exited by the time it returns — but before re-dispatching a retry,
+  the caller must confirm no `stamp merge` (or its test/smoke children) for this
+  ticket's worktree is still alive. Two `stamp merge` runs against one worktree are
+  never allowed. If a prior orphan is found, terminate it before retrying.
+- A `🛑 BLOCKED — stamp merge withheld` marker is **retryable** within the 3-attempt
+  cap (the trigger is usually a load-flaked check), but each retry is a **fresh,
+  serialized** foreground merge — never a concurrent re-run.
 
 > **Non-stamp repos:** if the ticket's repo is not stamp-gated, the merge subagent
 > opens a traditional GitHub PR instead of `stamp merge`/push, and the ticket is
