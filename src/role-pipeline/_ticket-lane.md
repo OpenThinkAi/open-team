@@ -39,9 +39,27 @@ Every role advance uses this three-step subroutine.
    error (already-claimed, issue-closed, clone-uri refused, stamp-enforce mismatch),
    that's an **exception** — surface it; do not dispatch.
 
-2. **Dispatch a Task subagent** into the prepared worktree. Use
-   `subagent_type: general-purpose` and set the subagent's `model` to the block's
-   `model`. Prompt template:
+2. **Dispatch a Task subagent** into the prepared worktree, **with
+   `run_in_background: true`**. Use `subagent_type: general-purpose` and set the
+   subagent's `model` to the block's `model`.
+
+   **Why background, not foreground.** A role phase can run for many minutes — a
+   full test suite, an iterating `stamp review`, a long implementation. A
+   *foreground* dispatch blocks your turn for that entire phase, which freezes the
+   user's interactive session start-to-finish (they can't type, can't kick off
+   anything else). The point of the subagent here is **context isolation** — the
+   phase's churn stays out of your context — **not** parallelism: a single
+   ticket's pipeline is a sequential dependency chain, so there is no other
+   conductor work to interleave anyway. Backgrounding gives up nothing and returns
+   the session to the user: with `run_in_background: true` your turn ends the
+   moment the subagent is launched, and the harness **re-invokes you with the
+   subagent's final message when the phase completes**. (A phase running longer
+   than ~5 min means the re-invocation reads your context past the prompt-cache
+   TTL — a minor cost any long phase already pays; the session-responsiveness win
+   dominates. Do **not** poll the background task with a timer — the completion
+   re-invokes you automatically.)
+
+   Prompt template:
 
    > Working directory: `<workspacePath>`. `cd` there first; never read or write
    > outside it.
@@ -64,7 +82,8 @@ Every role advance uses this three-step subroutine.
    > plan and its S/M/L + H/M/L self-rating; for **implementation**, a one-paragraph
    > diff summary and the stamp review status.
 
-3. **Record telemetry** (best-effort, foreground; never gate on it):
+3. **On completion (the harness re-invokes you with the result), record
+   telemetry** (best-effort, foreground; never gate on it):
 
    ```sh
    oteam telemetry record --ticket AGT-XXX --phase <phase> --model <model> --session <telemetry.sessionId> --started-at <telemetry.startedAt> --exit-code 0 >/dev/null 2>&1 || true
@@ -72,7 +91,10 @@ Every role advance uses this three-step subroutine.
 
    Skip when the block's `telemetry` is `null`.
 
-Then branch on the subagent's returned marker.
+Then branch on the subagent's returned marker (the STOP/PAUSED/BLOCKED line +
+payload it returned). Each role advance is therefore its own turn: dispatch
+(background) → yield → re-invoked on completion → telemetry + branch → dispatch
+the next role.
 
 ## The single-ticket sequence
 
