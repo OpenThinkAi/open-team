@@ -9,6 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  findTicketFileAnywhere,
   findTicketFileByID,
   isAgtId,
   parseTicket,
@@ -328,6 +329,142 @@ describe("runList --project", () => {
       assert.doesNotMatch(out, /AGT-002/);
       const empty = runList({ vault: root, project: "ghost" });
       assert.equal(empty, "(no tickets)");
+    } finally {
+      rmSync(root, { recursive: true });
+    }
+  });
+});
+
+describe("findTicketFileAnywhere", () => {
+  it("finds tickets in both tickets/ and archive/", () => {
+    const root = mkdtempSync(join(tmpdir(), "vault-any-"));
+    try {
+      mkdirSync(join(root, "tickets", "triage"), { recursive: true });
+      mkdirSync(join(root, "archive", "2026-04"), { recursive: true });
+      writeFileSync(join(root, "tickets", "triage", "AGT-001-a.md"), "x");
+      writeFileSync(join(root, "archive", "2026-04", "AGT-002-b.md"), "x");
+      assert.equal(
+        findTicketFileAnywhere(root, "AGT-001"),
+        join(root, "tickets", "triage", "AGT-001-a.md"),
+      );
+      assert.equal(
+        findTicketFileAnywhere(root, "AGT-002"),
+        join(root, "archive", "2026-04", "AGT-002-b.md"),
+      );
+    } finally {
+      rmSync(root, { recursive: true });
+    }
+  });
+
+  it("names both roots when nothing matches", () => {
+    const root = mkdtempSync(join(tmpdir(), "vault-any-"));
+    try {
+      mkdirSync(join(root, "tickets", "triage"), { recursive: true });
+      let caught: Error | null = null;
+      try {
+        findTicketFileAnywhere(root, "AGT-099");
+      } catch (e) {
+        caught = e as Error;
+      }
+      assert.ok(caught);
+      assert.match(caught!.message, /no ticket file matching AGT-099/);
+      assert.match(caught!.message, /tickets/);
+      assert.match(caught!.message, /archive/);
+    } finally {
+      rmSync(root, { recursive: true });
+    }
+  });
+
+  it("throws with candidates on multi-match across roots", () => {
+    const root = mkdtempSync(join(tmpdir(), "vault-any-"));
+    try {
+      mkdirSync(join(root, "tickets", "triage"), { recursive: true });
+      mkdirSync(join(root, "archive", "2026-04"), { recursive: true });
+      writeFileSync(join(root, "tickets", "triage", "AGT-001-a.md"), "x");
+      writeFileSync(join(root, "archive", "2026-04", "AGT-001-b.md"), "x");
+      assert.throws(
+        () => findTicketFileAnywhere(root, "AGT-001"),
+        /multiple files match AGT-001/,
+      );
+    } finally {
+      rmSync(root, { recursive: true });
+    }
+  });
+});
+
+describe("runList — header + done-footer", () => {
+  function seedWithDone(): { root: string; cleanup: () => void } {
+    const root = mkdtempSync(join(tmpdir(), "vault-hdr-"));
+    mkdirSync(join(root, "tickets", "triage"), { recursive: true });
+    mkdirSync(join(root, "tickets", "qa"), { recursive: true });
+    writeFileSync(
+      join(root, "tickets", "triage", "AGT-001-a.md"),
+      SAMPLE.replace("AGT-042", "AGT-001").replace("state: refined", "state: triage"),
+    );
+    writeFileSync(
+      join(root, "tickets", "qa", "AGT-002-b.md"),
+      SAMPLE.replace("AGT-042", "AGT-002").replace("state: refined", "state: done"),
+    );
+    return { root, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  }
+
+  it("prints a column header row above the tickets", () => {
+    const { root, cleanup } = seedWithDone();
+    try {
+      const out = runList({ vault: root });
+      const first = out.split("\n")[0]!;
+      assert.match(first, /^STATE/);
+      assert.match(first, /ID/);
+      assert.match(first, /TITLE/);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("appends a done-hidden footer (singular form for 1)", () => {
+    const { root, cleanup } = seedWithDone();
+    try {
+      const out = runList({ vault: root });
+      assert.match(out, /AGT-001/); // active triage ticket listed
+      assert.doesNotMatch(out, /AGT-002/); // done ticket hidden
+      assert.match(out, /1 done ticket hidden — use --include-archived/);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("no footer when --include-archived shows done tickets", () => {
+    const { root, cleanup } = seedWithDone();
+    try {
+      const out = runList({ vault: root, includeArchived: true });
+      assert.match(out, /AGT-002/);
+      assert.doesNotMatch(out, /done ticket.* hidden/);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("no footer when an explicit --state is given", () => {
+    const { root, cleanup } = seedWithDone();
+    try {
+      const out = runList({ vault: root, state: "done" });
+      assert.match(out, /AGT-002/);
+      assert.doesNotMatch(out, /hidden/);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("reports done-only matches instead of a bare (no tickets)", () => {
+    const root = mkdtempSync(join(tmpdir(), "vault-done-only-"));
+    try {
+      mkdirSync(join(root, "tickets", "qa"), { recursive: true });
+      writeFileSync(
+        join(root, "tickets", "qa", "AGT-003-c.md"),
+        SAMPLE.replace("AGT-042", "AGT-003").replace("state: refined", "state: done"),
+      );
+      const out = runList({ vault: root });
+      assert.match(out, /no active tickets; 1 done hidden — use --include-archived/);
     } finally {
       rmSync(root, { recursive: true });
     }

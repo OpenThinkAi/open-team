@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   readConfig,
   resolveByNameOrPath,
@@ -113,6 +113,38 @@ export function findTicketFileByID(vaultPath: string, ticketID: string): string 
   }
   throw new Error(
     `multiple files match ${ticketID} in ${ticketsRoot}:\n  ${matches.join("\n  ")}`,
+  );
+}
+
+/**
+ * Resolve a ticket file from an AGT-NNN id, searching BOTH the active
+ * `tickets/<state>/` dirs and `archive/YYYY-MM/`. Unlike `findTicketFileByID`
+ * (assign/archive, which only act on live tickets), `oteam show` must also
+ * surface completed/archived tickets, so it walks both roots.
+ */
+export function findTicketFileAnywhere(vaultPath: string, ticketID: string): string {
+  if (!isAgtId(ticketID)) {
+    throw new Error(`findTicketFileAnywhere: "${ticketID}" is not an AGT-NNN id`);
+  }
+  const roots = [join(vaultPath, "tickets"), join(vaultPath, "archive")];
+  const matches: string[] = [];
+  for (const root of roots) {
+    walkMarkdown(root, (path) => {
+      const base = basename(path);
+      if (base === `${ticketID}.md` || base.startsWith(`${ticketID}-`)) {
+        matches.push(path);
+      }
+    });
+  }
+
+  if (matches.length === 1) return matches[0]!;
+  if (matches.length === 0) {
+    throw new Error(
+      `no ticket file matching ${ticketID}-*.md (searched: ${roots.join(", ")})`,
+    );
+  }
+  throw new Error(
+    `multiple files match ${ticketID}:\n  ${matches.join("\n  ")}`,
   );
 }
 

@@ -1,6 +1,7 @@
 import { Command, Option } from "commander";
 import { runPull } from "./commands/pull.ts";
 import { runList } from "./commands/list.ts";
+import { runShow } from "./commands/show.ts";
 import { runArchive } from "./commands/archive.ts";
 import { buildConfigCommand } from "./commands/config.ts";
 import { buildDoctorCommand } from "./commands/doctor.ts";
@@ -156,6 +157,19 @@ program
       process.stdout.write(runList({ ...opts, vault: opts.workspace ?? opts.vault }) + "\n");
     },
   );
+
+program
+  .command("show <id-or-path>")
+  .description(
+    "Print a single ticket's frontmatter and most recent comment (AGT-NNN id or path; searches tickets/ and archive/)",
+  )
+  .option("-w, --workspace <name-or-path>", "Use a specific registered workspace")
+  .addOption(new Option("--vault <name-or-path>").hideHelp())
+  .action((idOrPath: string, opts: { workspace?: string; vault?: string }) => {
+    process.stdout.write(
+      runShow({ idOrPath, vault: opts.workspace ?? opts.vault }) + "\n",
+    );
+  });
 
 program
   .command("archive <ticket-id>")

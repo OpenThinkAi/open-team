@@ -458,7 +458,7 @@ If a Step 6 STOP fires, the merge from Step 5 has already shipped — the ticket
 
 ### Phase 4.5 — Release follow-up (single-tier stamp only)
 
-If the repo publishes artifacts (npm, crates.io, PyPI, GitHub Releases) gated on a version bump, the merge above adds the change but won't ship until the version bumps. Re-read `CLAUDE.md`/`AGENTS.md` for a "Releases" / "Publishing" section.
+If the repo publishes artifacts (npm, crates.io, PyPI, GitHub Releases) gated on a version bump, the merge above adds the change but won't ship until the version bumps. Re-read `CLAUDE.md`/`AGENTS.md`/`README.md` for a "Releases" / "Publishing" section.
 
 - No documented release ritual → record "no release follow-up applicable" and proceed.
 - User-facing change + documented ritual → cut a `release/vX.Y.Z` branch (next patch unless `CLAUDE.md` says otherwise), bump the manifest, refresh lock files, commit, stamp-review (same 5-round rule), stamp-merge into the default branch, stamp-push. Then `gh run list --repo <repo> --limit 3` to confirm the publish workflow kicked off (`in_progress` or `completed success`). Don't wait for completion — just confirm it fired.

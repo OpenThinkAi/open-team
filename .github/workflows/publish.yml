@@ -5,9 +5,11 @@ name: publish
 # secret; the npm package must have a Trusted Publisher configured on the
 # npm side pointing at this repo + workflow filename.
 #
-# Note: package.json currently has `"private": true`. Until that flips,
-# this workflow will short-circuit at the `private check` step. Flip
-# `private` to `false` (or remove the field) when ready to publish.
+# The package is public and published (see README "Releases"). The deliberate
+# gate on a publish is a reviewed `version` bump in package.json — pushes to
+# main that don't change the version are a no-op here. The `private check` step
+# below is a defensive short-circuit: if `"private": true` is ever re-added,
+# the workflow no-ops instead of publishing.
 
 on:
   push:

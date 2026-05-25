@@ -20,51 +20,71 @@ export interface ListOptions {
   includeArchived?: boolean;
 }
 
+// Header row labelling the column order. STATE is the only fixed-width column
+// (padEnd(12), matching formatTicket); team/project are inline annotations, so
+// the header names field order rather than aligning every column.
+const LIST_HEADER = `${"STATE".padEnd(12)} ID  [TEAM] (PROJECT)  TITLE  REPO`;
+
 export function runList(opts: ListOptions): string {
   const vaultPath = resolveVaultPath({ flagValue: opts.vault });
   const tickets = opts.includeArchived
     ? [...readAllTickets(vaultPath), ...readAllArchivedTickets(vaultPath)]
     : readAllTickets(vaultPath);
 
-  let filtered = opts.state
-    ? tickets.filter((t) => t.state === opts.state)
-    : opts.includeArchived
-      ? tickets
-      : tickets.filter((t) => t.state !== "done");
-
+  // Apply the explicit field filters first; the implicit done-hiding is handled
+  // afterwards so we can count what it hides for the footer.
+  let matched = tickets;
+  if (opts.state) {
+    matched = matched.filter((t) => t.state === opts.state);
+  }
   if (opts.project) {
-    filtered = filterEqualsCI(filtered, "project", opts.project);
+    matched = filterEqualsCI(matched, "project", opts.project);
   }
   if (opts.repo) {
-    filtered = filterEqualsCI(filtered, "repo", opts.repo);
+    matched = filterEqualsCI(matched, "repo", opts.repo);
   }
   if (opts.team) {
-    filtered = filterEqualsCI(filtered, "team", opts.team);
+    matched = filterEqualsCI(matched, "team", opts.team);
   }
   if (opts.priority) {
-    filtered = filterEqualsCI(filtered, "priority", opts.priority);
+    matched = filterEqualsCI(matched, "priority", opts.priority);
   }
   if (opts.source) {
     const target = opts.source.toLowerCase();
-    filtered = filtered.filter((t) => t.source.type.toLowerCase() === target);
+    matched = matched.filter((t) => t.source.type.toLowerCase() === target);
   }
   if (opts.label && opts.label.length > 0) {
     const wanted = opts.label.map((l) => l.toLowerCase());
-    filtered = filtered.filter((t) => {
+    matched = matched.filter((t) => {
       const have = t.labels.map((l) => l.toLowerCase());
       return wanted.every((w) => have.includes(w));
     });
   }
   if (opts.match) {
     const needle = opts.match.toLowerCase();
-    filtered = filtered.filter((t) => t.title.toLowerCase().includes(needle));
+    matched = matched.filter((t) => t.title.toLowerCase().includes(needle));
   }
   if (opts.grep) {
     const needle = opts.grep.toLowerCase();
-    filtered = filtered.filter((t) => bodyMatches(t.filePath, needle));
+    matched = matched.filter((t) => bodyMatches(t.filePath, needle));
   }
 
-  if (filtered.length === 0) return "(no tickets)";
+  // Done tickets are hidden unless an explicit --state or --include-archived
+  // was given. Count the hidden ones (matching the other filters) for the footer.
+  const hideDone = !opts.includeArchived && !opts.state;
+  const doneHidden = hideDone
+    ? matched.filter((t) => t.state === "done").length
+    : 0;
+  const filtered = hideDone
+    ? matched.filter((t) => t.state !== "done")
+    : matched;
+
+  if (filtered.length === 0) {
+    if (doneHidden > 0) {
+      return `(no active tickets; ${doneHidden} done hidden — use --include-archived)`;
+    }
+    return "(no tickets)";
+  }
 
   const order: readonly string[] = TICKET_STATES;
   filtered.sort((a, b) => {
@@ -74,7 +94,13 @@ export function runList(opts: ListOptions): string {
     return a.numericID - b.numericID;
   });
 
-  return filtered.map(formatTicket).join("\n");
+  const lines = [LIST_HEADER, ...filtered.map(formatTicket)];
+  if (doneHidden > 0) {
+    lines.push(
+      `(${doneHidden} done ticket${doneHidden === 1 ? "" : "s"} hidden — use --include-archived)`,
+    );
+  }
+  return lines.join("\n");
 }
 
 function filterEqualsCI(
