@@ -21,7 +21,12 @@ The caller's Hard Rules apply throughout — especially: **all role work runs as
 subagents you dispatch** (never `claude` / `claude -p` / Agent SDK), **never push to
 GitHub directly** (stamp is the gate; stamp mirrors), **3-attempt cap** on any
 failing op, **tests run against the prepared clean worktree** (never the caller's
-live working dir), and **`stamp review` is the one intentional metered call**.
+live working dir), and **`stamp review` is the one gated review call — it
+runs on the **local** model by default (unmetered) and escalates to the
+metered Anthropic backend only for large/cross-cutting diffs** (the backend
+is chosen per-run by diff size via `STAMP_REVIEWER_BACKEND`; see
+assign-ticket §5·0). Because `/refine` errs small, most tickets review
+locally.
 
 ## The core subroutine — "drive one role for a ticket"
 

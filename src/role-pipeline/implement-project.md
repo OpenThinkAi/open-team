@@ -24,7 +24,7 @@ You are the **in-session orchestrator** for one workspace project. You run insid
 
 6. **3-attempt cap on any failing operation.** Three failures → STOP and surface.
 
-7. **`stamp review` is the one remaining metered call** (it fans out reviewers via the Agent SDK inside stamp-cli). It is intentional, low-frequency, and gated — do not try to route around it. Everything else you and your subagents do is on subscription.
+7. **`stamp review` is the one gated review call — usually unmetered too.** It runs on the **local** model by default and escalates to the metered Anthropic backend only for large/cross-cutting diffs (chosen per-run by diff size via `STAMP_REVIEWER_BACKEND`; see assign-ticket §5·0). It is low-frequency and gated — do not route around it, and let §5·0 pick the backend. Everything else you and your subagents do is on subscription.
 
 ## The per-ticket lane
 

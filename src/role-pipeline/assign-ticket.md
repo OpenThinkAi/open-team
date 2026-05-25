@@ -327,9 +327,29 @@ fi
 
 **On rebase conflict, STOP and hand off — never attempt automatic conflict resolution.** Print the `🛑 BLOCKED` banner above, surface the conflicting paths to the human, and do not proceed to `stamp review`/`stamp merge`. (In `local-stamp` mode, `$FEATURE_BRANCH` here is the branch carrying your commits — i.e. `$WORK_BRANCH` if you cut one in Step 3; rebase that branch and leave the eventual PR base, the original `$FEATURE_BRANCH`, to be re-derived after the rebase. If unsure, rebase the branch your Step-4 commits are on.) After a clean rebase (or a no-op when the base was unchanged), continue into the `stamp review` block below — it now runs against the fresh base.
 
+#### 5·0 — Review-backend selection (model-aware, per-run)
+
+Before the first `stamp review` in 5a or 5c, pick the reviewer backend by **diff size** and `export` it. This is per-run env — **never** edit `~/.stamp/config.yml` (concurrent tickets would race on shared config; the env override is collision-safe). Use the same `--diff` range you'll pass to `stamp review` below — `$BASE_BRANCH..$FEATURE_BRANCH` in 5a, `$FEATURE_BRANCH..$WORK_BRANCH` in 5c:
+
+```sh
+REVIEW_RANGE="$BASE_BRANCH..$FEATURE_BRANCH"   # 5c: "$FEATURE_BRANCH..$WORK_BRANCH"
+DIFF_BYTES=$(git diff "$REVIEW_RANGE" | wc -c | tr -d ' ')
+THRESHOLD="${STAMP_LOCAL_REVIEW_MAX_BYTES:-30000}"
+if [ "$DIFF_BYTES" -le "$THRESHOLD" ]; then
+  export STAMP_REVIEWER_BACKEND=local      # small diff → unmetered local model
+else
+  export STAMP_REVIEWER_BACKEND=anthropic   # large/cross-cutting → metered, reliable
+fi
+echo "review backend: $STAMP_REVIEWER_BACKEND (diff ${DIFF_BYTES}b, threshold ${THRESHOLD}b)"
+```
+
+- **`local`** uses `STAMP_LOCAL_MODEL` / `STAMP_LOCAL_ENDPOINT` (set once in your sourced env files). If those are unset, stamp falls back to the Anthropic default automatically — an operator who hasn't configured a local model still gets a working review.
+- The threshold encodes the spike finding that a local model degrades on large diffs; tune via `STAMP_LOCAL_REVIEW_MAX_BYTES`. Because `/refine` errs small, most tickets land on the unmetered `local` path; only the big/cross-cutting ones spend a metered Anthropic review.
+- The export persists across the 5-round iteration (same shell), so every round uses the chosen backend.
+
 #### 5a — Stamp-protected repo
 
-**Run the Pre-review freshness guard above first** (it rebases onto current `origin/$BASE_BRANCH` if it advanced since clone, or STOPs on conflict). Then run review and merge. Capture the review's combined output (stdout + stderr) to a known tempfile so Step 6 can route any `STAMP-RETRO` candidates the reviewers emit. Re-run the entire `tee` block on every round of the 5-round iteration — `$STAMP_REVIEW_OUT` is reassigned to a fresh `mktemp` each round, so Step 6 reads only the last (gate-opening) run; prior tempfiles are left behind for the OS to reap.
+**Run §5·0 (review-backend selection) above first, then the Pre-review freshness guard** (it rebases onto current `origin/$BASE_BRANCH` if it advanced since clone, or STOPs on conflict). Then run review and merge. Capture the review's combined output (stdout + stderr) to a known tempfile so Step 6 can route any `STAMP-RETRO` candidates the reviewers emit. Re-run the entire `tee` block on every round of the 5-round iteration — `$STAMP_REVIEW_OUT` is reassigned to a fresh `mktemp` each round, so Step 6 reads only the last (gate-opening) run; prior tempfiles are left behind for the OS to reap.
 
 ```sh
 STAMP_REVIEW_OUT=$(mktemp -t stamp-review.XXXXXX)
@@ -365,7 +385,7 @@ Capture the PR URL into `linked-pr:`. Human merges through GitHub PR review.
 
 #### 5c — Local-stamp repo (`.stamp/` present, GitHub origin)
 
-**Run the Pre-review freshness guard above first** (rebase `$WORK_BRANCH` onto current `origin/$BASE_BRANCH` if it advanced since clone, or STOP on conflict). Then run review on `$WORK_BRANCH` against `$FEATURE_BRANCH` (the eventual PR base). Capture the review's combined output (stdout + stderr) to a known tempfile so Step 6 can route any `STAMP-RETRO` candidates the reviewers emit. Re-run the entire `tee` block on every round of the 5-round iteration — `$STAMP_REVIEW_OUT` is reassigned to a fresh `mktemp` each round, so Step 6 reads only the last (gate-opening) run; prior tempfiles are left behind for the OS to reap.
+**Run §5·0 (review-backend selection) above first** (with `REVIEW_RANGE="$FEATURE_BRANCH..$WORK_BRANCH"`), **then the Pre-review freshness guard** (rebase `$WORK_BRANCH` onto current `origin/$BASE_BRANCH` if it advanced since clone, or STOP on conflict). Then run review on `$WORK_BRANCH` against `$FEATURE_BRANCH` (the eventual PR base). Capture the review's combined output (stdout + stderr) to a known tempfile so Step 6 can route any `STAMP-RETRO` candidates the reviewers emit. Re-run the entire `tee` block on every round of the 5-round iteration — `$STAMP_REVIEW_OUT` is reassigned to a fresh `mktemp` each round, so Step 6 reads only the last (gate-opening) run; prior tempfiles are left behind for the OS to reap.
 
 ```sh
 STAMP_REVIEW_OUT=$(mktemp -t stamp-review.XXXXXX)
