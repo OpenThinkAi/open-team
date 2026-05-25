@@ -18,7 +18,6 @@ describe("models: phaseForState", () => {
     assert.equal(phaseForState("triage"), "product");
     assert.equal(phaseForState("refined"), "spike");
     assert.equal(phaseForState("in-progress"), "implementation");
-    assert.equal(phaseForState("qa"), "qa");
   });
 
   it("returns null for blocked/done (pipeline STOPs immediately)", () => {
@@ -29,6 +28,7 @@ describe("models: phaseForState", () => {
   it("returns null for unknown states (defensive — frontmatter parser already gated)", () => {
     assert.equal(phaseForState(""), null);
     assert.equal(phaseForState("not-a-real-state"), null);
+    assert.equal(phaseForState("qa"), null); // qa removed — no longer a state/phase
   });
 });
 
@@ -56,11 +56,10 @@ describe("models: DEFAULT_MODELS (AGT-106)", () => {
     }
   });
 
-  it("matches the AGT-106 baseline: Sonnet/Opus/Sonnet/Sonnet", () => {
+  it("matches the AGT-106 baseline: Sonnet/Opus/Sonnet", () => {
     assert.equal(DEFAULT_MODELS.product, "claude-sonnet-4-6");
     assert.equal(DEFAULT_MODELS.spike, "claude-opus-4-7");
     assert.equal(DEFAULT_MODELS.implementation, "claude-sonnet-4-6");
-    assert.equal(DEFAULT_MODELS.qa, "claude-sonnet-4-6");
   });
 });
 
@@ -74,15 +73,14 @@ describe("models: resolveRoleModel (AC #5 — per-spawn model selection)", () =>
 
   it("falls back to ROLE_PIPELINE_MODEL when the phase is unset (AC #2)", () => {
     const models: ModelsConfig = { spike: "claude-opus-4-7" };
-    // "qa" is unset even though "spike" is pinned — phases resolve independently.
-    assert.equal(resolveRoleModel("qa", models), fallback);
+    // implementation is unset even though "spike" is pinned — phases resolve independently.
+    assert.equal(resolveRoleModel("in-progress", models), fallback);
   });
 
   it("falls back when the entire models block is empty", () => {
     assert.equal(resolveRoleModel("triage", {}), fallback);
     assert.equal(resolveRoleModel("refined", {}), fallback);
     assert.equal(resolveRoleModel("in-progress", {}), fallback);
-    assert.equal(resolveRoleModel("qa", {}), fallback);
   });
 
   it("falls back when models is undefined (legacy config / never-set)", () => {
@@ -94,7 +92,6 @@ describe("models: resolveRoleModel (AC #5 — per-spawn model selection)", () =>
       product: "claude-haiku-4-5",
       spike: "claude-opus-4-7",
       implementation: "claude-sonnet-4-6",
-      qa: "claude-sonnet-4-6",
     };
     assert.equal(resolveRoleModel("blocked", models), fallback);
     assert.equal(resolveRoleModel("done", models), fallback);
@@ -105,20 +102,17 @@ describe("models: resolveRoleModel (AC #5 — per-spawn model selection)", () =>
     assert.equal(resolveRoleModel("triage", models), "claude-haiku-4-5");
     assert.equal(resolveRoleModel("refined", models), fallback);
     assert.equal(resolveRoleModel("in-progress", models), fallback);
-    assert.equal(resolveRoleModel("qa", models), fallback);
   });
 
-  it("all four phases pinned → all four resolve to their pin (full-table case)", () => {
+  it("all three phases pinned → all three resolve to their pin (full-table case)", () => {
     const models: ModelsConfig = {
       product: "claude-haiku-4-5",
       spike: "claude-opus-4-7",
       implementation: "claude-sonnet-4-6",
-      qa: "claude-sonnet-4-6",
     };
     assert.equal(resolveRoleModel("triage", models), "claude-haiku-4-5");
     assert.equal(resolveRoleModel("refined", models), "claude-opus-4-7");
     assert.equal(resolveRoleModel("in-progress", models), "claude-sonnet-4-6");
-    assert.equal(resolveRoleModel("qa", models), "claude-sonnet-4-6");
   });
 });
 
@@ -230,7 +224,6 @@ describe("models: resolveModelForTicket (AGT-107)", () => {
     product: "claude-sonnet-4-6",
     spike: "claude-opus-4-7",
     implementation: "claude-sonnet-4-6",
-    qa: "claude-sonnet-4-6",
   };
 
   it("downshifts to Haiku on manual + populated-AC + triage + downshift on (AC #1)", () => {
@@ -312,7 +305,7 @@ describe("models: resolveModelForTicket (AGT-107)", () => {
   });
 
   it("non-triage states delegate to resolveRoleModel regardless of AC shape", () => {
-    for (const state of ["refined", "in-progress", "qa"]) {
+    for (const state of ["refined", "in-progress"]) {
       assert.equal(
         resolveModelForTicket({
           state,

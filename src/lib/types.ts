@@ -35,7 +35,6 @@ export const TICKET_STATES = [
   "triage",
   "refined",
   "in-progress",
-  "qa",
   "blocked",
   "done",
 ] as const;

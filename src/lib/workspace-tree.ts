@@ -20,7 +20,6 @@ export const WORKSPACE_SUBDIRS: ReadonlyArray<string> = [
   "tickets/triage",
   "tickets/refined",
   "tickets/in-progress",
-  "tickets/qa",
   "tickets/blocked",
   "projects",
   "archive",

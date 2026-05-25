@@ -130,8 +130,8 @@ Follow the **shared ticket lane** for `AGT-XXX`:
 
 - **L1 — Product, then spike** (core subroutine).
 - **PLAN GATE** — present this one ticket's plan; S/H auto-proceeds (still vetoable).
-- **L2 — Implementation + QA** (impl + clean-worktree tests + `stamp review`, stop
-  before merge; then QA).
+- **L2 — Implementation** (impl + clean-worktree tests + `stamp review`, stop
+  before merge).
 - **MERGE GATE** — present the ready-to-merge ticket; on approval, the merge subagent
   runs `stamp merge` + push (stamp repo) or opens a PR (non-stamp repo).
 

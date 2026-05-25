@@ -72,7 +72,7 @@ export type CloneUriResolver = (slug: string) => Promise<string>;
 export interface AssignmentContext {
   ticketId: string;
   ticketPath: string;
-  /** Ticket `state:` (triage|refined|in-progress|qa|blocked|done|…). */
+  /** Ticket `state:` (triage|refined|in-progress|blocked|done|…). */
   state: string;
   /** Role-pipeline phase for this state, or null on blocked/done. */
   phase: string | null;

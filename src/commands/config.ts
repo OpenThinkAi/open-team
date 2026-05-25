@@ -176,7 +176,7 @@ export function buildConfigCommand(): Command {
   stamp.addCommand(stampShow);
 
   const models = new Command("models").description(
-    "Per-phase model overrides for the role pipeline (product|spike|implementation|qa)",
+    "Per-phase model overrides for the role pipeline (product|spike|implementation)",
   );
 
   models

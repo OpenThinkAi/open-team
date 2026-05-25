@@ -175,7 +175,7 @@ export function summarize(
 ): SummaryRow[] {
   const filtered = applyFilter(runs, filter);
   // Bucket on a space-joined key. Phase is a fixed enum
-  // (product|spike|implementation|qa) and model ids are SDK-issued slugs;
+  // (product|spike|implementation) and model ids are SDK-issued slugs;
   // neither contains whitespace, so the join is unambiguous in practice.
   // The structured-value bucket below preserves the original phase/model
   // strings so the rendered row is not reconstructed from a split.

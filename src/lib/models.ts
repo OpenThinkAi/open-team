@@ -11,14 +11,14 @@ export const ROLE_PIPELINE_MODEL = "claude-opus-4-7";
 // Product model still drives every other path.
 export const HAIKU_PRODUCT_MODEL = "claude-haiku-4-5";
 
-export const PHASES = ["product", "spike", "implementation", "qa"] as const;
+export const PHASES = ["product", "spike", "implementation"] as const;
 export type Phase = (typeof PHASES)[number];
 
 export type ModelsConfig = Partial<Record<Phase, string>>;
 
 // Defaults seeded by `oteam init` when no `models` block exists in
 // `~/.open-team/config.json`. The Sonnet/Opus split routes the bread-and-
-// butter phases (Product/Implementation/QA) to Sonnet 4.6 and reserves
+// butter phases (Product/Implementation) to Sonnet 4.6 and reserves
 // Opus 4.7 for the spike, where design judgment earns its keep. AGT-107
 // layers a Haiku downshift on Product when the ticket is well-formed;
 // this constant is the unconditional baseline.
@@ -26,7 +26,6 @@ export const DEFAULT_MODELS: Required<ModelsConfig> = {
   product: "claude-sonnet-4-6",
   spike: "claude-opus-4-7",
   implementation: "claude-sonnet-4-6",
-  qa: "claude-sonnet-4-6",
 };
 
 export function isPhase(value: string): value is Phase {
@@ -48,8 +47,6 @@ export function phaseForState(state: string): Phase | null {
       return "spike";
     case "in-progress":
       return "implementation";
-    case "qa":
-      return "qa";
     default:
       return null;
   }
