@@ -1,6 +1,6 @@
 {
   "name": "@openthink/team",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "type": "module",
   "description": "Source-agnostic vault-driven role pipeline for driving Claude agents against tickets (in-session, zero-SDK)",
   "bin": {
@@ -13,7 +13,7 @@
     "build": "tsup && cp src/role-pipeline/assign-ticket.md dist/assign-ticket.md && cp src/role-pipeline/implement-project.md dist/implement-project.md && cp src/role-pipeline/dispatch.md dist/dispatch.md && cp src/role-pipeline/refine.md dist/refine.md && cp src/role-pipeline/_ticket-lane.md dist/_ticket-lane.md",
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --import tsx 'tests/**/*.test.ts'",
+    "test": "node --test --import tsx --test-concurrency=${TEST_CONCURRENCY:-4} 'tests/**/*.test.ts'",
     "postinstall": "[ -n \"$OTEAM_SKIP_INSTALL_COMMANDS\" ] || node dist/index.js install-commands || true",
     "prepublishOnly": "npm run build"
   },
