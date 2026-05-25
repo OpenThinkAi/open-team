@@ -3,6 +3,7 @@ import { runPull } from "./commands/pull.ts";
 import { runList } from "./commands/list.ts";
 import { runArchive } from "./commands/archive.ts";
 import { buildConfigCommand } from "./commands/config.ts";
+import { buildDoctorCommand } from "./commands/doctor.ts";
 import { buildInitCommand } from "./commands/init.ts";
 import { buildInstallCommandsCommand } from "./commands/install-commands.ts";
 import { buildProjectCommand } from "./commands/project.ts";
@@ -167,6 +168,7 @@ program
   });
 
 program.addCommand(buildConfigCommand());
+program.addCommand(buildDoctorCommand());
 program.addCommand(buildInitCommand());
 program.addCommand(buildInstallCommandsCommand());
 program.addCommand(buildProjectCommand());

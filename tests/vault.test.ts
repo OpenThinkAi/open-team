@@ -281,6 +281,31 @@ describe("readAllTickets", () => {
       rmSync(root, { recursive: true });
     }
   });
+
+  it("excludes non-done tickets parked under a shadow tickets/archive/ dir", () => {
+    const root = mkdtempSync(join(tmpdir(), "vault-"));
+    try {
+      mkdirSync(join(root, "tickets", "triage"), { recursive: true });
+      mkdirSync(join(root, "tickets", "archive", "2026-05"), { recursive: true });
+      writeFileSync(
+        join(root, "tickets", "triage", "AGT-001-a.md"),
+        SAMPLE.replace("AGT-042", "AGT-001"),
+      );
+      // A refined (non-done) ticket sitting under tickets/archive/ must NOT
+      // leak into the active list — this is the AGT-372–375 phantom-active bug.
+      writeFileSync(
+        join(root, "tickets", "archive", "2026-05", "AGT-002-ghost.md"),
+        SAMPLE.replace("AGT-042", "AGT-002"),
+      );
+      const tickets = readAllTickets(root);
+      assert.deepEqual(
+        tickets.map((t) => t.id),
+        ["AGT-001"],
+      );
+    } finally {
+      rmSync(root, { recursive: true });
+    }
+  });
 });
 
 describe("runList --project", () => {

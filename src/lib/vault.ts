@@ -128,12 +128,29 @@ export function readAllTickets(vaultPath?: string): VaultTicket[] {
   if (!exists) return [];
 
   const tickets: VaultTicket[] = [];
-  walkMarkdown(ticketsDir, (path) => {
-    const ticket = parseTicket(path);
-    if (ticket) tickets.push(ticket);
-  });
+  // Skip any nested `archive/` under tickets/ (e.g. a shadow `tickets/archive/`).
+  // The canonical archive is top-level `archive/` (see readAllArchivedTickets);
+  // tickets parked under `tickets/archive/` are NOT active and must never leak
+  // into `oteam list`. `oteam doctor` flags such files for relocation.
+  walkMarkdown(
+    ticketsDir,
+    (path) => {
+      const ticket = parseTicket(path);
+      if (ticket) tickets.push(ticket);
+    },
+    NESTED_ARCHIVE_SKIP,
+  );
   return tickets;
 }
+
+/**
+ * Directory basenames that `readAllTickets` refuses to descend into when
+ * walking `tickets/`. Keeps a stray `tickets/archive/` (the bug behind the
+ * AGT-372–375 phantom-active tickets) from leaking archived rows into the
+ * active list, while leaving `readAllArchivedTickets` (which starts AT the
+ * top-level `archive/`) untouched.
+ */
+const NESTED_ARCHIVE_SKIP: ReadonlySet<string> = new Set(["archive"]);
 
 /**
  * Walk `<vault>/archive/YYYY-MM/*.md`. Used by surfaces that need a complete
@@ -160,7 +177,11 @@ export function readAllArchivedTickets(vaultPath?: string): VaultTicket[] {
   return tickets;
 }
 
-function walkMarkdown(dir: string, visit: (path: string) => void): void {
+function walkMarkdown(
+  dir: string,
+  visit: (path: string) => void,
+  skipDirNames?: ReadonlySet<string>,
+): void {
   let entries: string[] = [];
   try {
     entries = readdirSync(dir);
@@ -177,11 +198,23 @@ function walkMarkdown(dir: string, visit: (path: string) => void): void {
       continue;
     }
     if (stat.isDirectory()) {
-      walkMarkdown(full, visit);
+      if (skipDirNames?.has(name)) continue;
+      walkMarkdown(full, visit, skipDirNames);
     } else if (stat.isFile() && full.endsWith(".md")) {
       visit(full);
     }
   }
+}
+
+/**
+ * Collect every `*.md` path under `dir` (recursively). Unlike `readAllTickets`,
+ * this does NOT skip nested `archive/` — `oteam doctor` needs to see the ghost
+ * files in order to flag them.
+ */
+export function listMarkdownFiles(dir: string): string[] {
+  const out: string[] = [];
+  walkMarkdown(dir, (path) => out.push(path));
+  return out;
 }
 
 export function parseTicket(path: string): VaultTicket | null {
