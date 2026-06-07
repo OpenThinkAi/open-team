@@ -402,7 +402,6 @@ describe("oteam doctor --install-hook", () => {
       // Unstage and remove the ghost ticket; seed a clean ticket and stage it
       spawnSync("git", ["-C", root, "reset", ghostPath], { encoding: "utf8" });
       rmSync(ghostPath, { force: true });
-      rmSync(shimDir, { recursive: true, force: true });
       const cleanPath = join(root, "tickets", "triage", "AGT-001-ok.md");
       writeFileSync(
         cleanPath,
@@ -412,6 +411,8 @@ describe("oteam doctor --install-hook", () => {
 
       const r2 = spawnSync(hookPath, [], { cwd: root, encoding: "utf8", env: testEnv });
       assert.equal(r2.status, 0, "hook exits 0 for a clean vault");
+      // Clean up shim after r2 so PATH is valid for both hook runs
+      rmSync(shimDir, { recursive: true, force: true });
     } finally {
       cleanup();
     }
