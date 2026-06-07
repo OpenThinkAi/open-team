@@ -1,5 +1,102 @@
-import { readdirSync, statSync } from "node:fs";
+import { readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+
+/**
+ * Returns true if any file under `<vaultPath>/tickets/**` or
+ * `<vaultPath>/archive/**` has a basename matching `AGT-<id>[-.]…`,
+ * regardless of slug.  Used by issueTicketID to detect numeric-ID collisions
+ * that a full-filename check would miss.
+ */
+export function idExistsInVault(vaultPath: string, id: string): boolean {
+  const numeric = id.replace(/^AGT-0*/, "");
+  // Match AGT-NNN-slug.md or AGT-NNN.md (no-slug edge case), padding-insensitive.
+  for (const sub of ["tickets", "archive"]) {
+    const dir = join(vaultPath, sub);
+    let found = false;
+    walk(dir, (basename) => {
+      if (found) return;
+      if (!basename.startsWith("AGT-") || !basename.endsWith(".md")) return;
+      const rest = basename.slice("AGT-".length); // "007-foo.md" or "7-foo.md"
+      const digits = rest.match(/^(\d+)/)?.[1];
+      if (!digits) return;
+      if (parseInt(digits, 10) === parseInt(numeric, 10)) {
+        found = true;
+      }
+    });
+    if (found) return true;
+  }
+  return false;
+}
+
+/**
+ * Issues the next free ticket ID, writes the ticket file atomically, and
+ * returns `{ id, path }`.  On EEXIST (lost race or vault-wide collision the
+ * pre-write rescan missed), bumps the candidate and retries.  The `render`
+ * callback is called with the *final* chosen ID so the file body always
+ * contains the right frontmatter ID.
+ *
+ * @param vaultPath   Absolute path to the vault root.
+ * @param targetDir   Absolute path to the directory to write into (e.g.
+ *                    `<vault>/tickets/triage`).  Caller is responsible for
+ *                    ensuring it exists before calling.
+ * @param slug        Filename slug (e.g. "my-ticket-title").
+ * @param render      Returns the full file body for the given ID string.
+ */
+export function issueTicketID(
+  vaultPath: string,
+  targetDir: string,
+  slug: string,
+  render: (id: string) => string,
+): { id: string; path: string } {
+  const MAX_ATTEMPTS = 100;
+  let candidate = nextTicketID(vaultPath);
+
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    // Pre-write rescan: skip numeric IDs already present anywhere in the vault.
+    if (idExistsInVault(vaultPath, candidate)) {
+      candidate = bumpID(candidate);
+      continue;
+    }
+
+    const filename = `${candidate}-${slug}.md`;
+    const targetPath = join(targetDir, filename);
+    const body = render(candidate);
+
+    try {
+      // Atomic claim: O_CREAT | O_EXCL — fails with EEXIST if another process
+      // won the race between our rescan and this write.
+      writeFileSync(targetPath, body, { flag: "wx", encoding: "utf8" });
+      return { id: candidate, path: targetPath };
+    } catch (err: unknown) {
+      if (isEExist(err)) {
+        // Lost the write race — bump and retry.
+        candidate = bumpID(candidate);
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  throw new Error(
+    `issueTicketID: exceeded ${MAX_ATTEMPTS} attempts — vault may be locked or in an inconsistent state`,
+  );
+}
+
+/** Increment the numeric part of an AGT-NNN ID by 1, preserving padding. */
+function bumpID(id: string): string {
+  const digits = id.match(/^AGT-(\d+)$/)?.[1];
+  if (!digits) throw new Error(`issueTicketID: cannot bump malformed ID "${id}"`);
+  const next = parseInt(digits, 10) + 1;
+  return `AGT-${String(next).padStart(digits.length, "0")}`;
+}
+
+function isEExist(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as NodeJS.ErrnoException).code === "EEXIST"
+  );
+}
 
 export function nextTicketID(vaultPath: string): string {
   let highest = 0;

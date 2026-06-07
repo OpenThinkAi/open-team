@@ -1,10 +1,10 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { getIngestor } from "../ingestors/index.ts";
 import { renderTicket } from "../lib/render.ts";
 import { normaliseSource } from "../lib/normalise.ts";
 import {
-  nextTicketID,
+  issueTicketID,
   nowISOTimestamp,
   slugify,
   todayISODate,
@@ -75,25 +75,25 @@ export async function runPull(opts: PullOptions): Promise<PullResult> {
   }
 
   const normalised = normaliseSource(payload);
-  const id = nextTicketID(vault);
   const slug = slugify(payload.title);
-  const filename = `${id}-${slug}.md`;
-  const target = join(triageDir, filename);
-  if (existsSync(target)) {
-    throw new Error(
-      `target already exists at ${target} — ID scan collision`,
-    );
-  }
   mkdirSync(triageDir, { recursive: true });
-  const body = renderTicket({
-    id,
-    payload,
-    normalised,
-    todayISO: todayISODate(),
-    fetchedAtISO: nowISOTimestamp(),
-    project: opts.project ?? deriveProject(payload.repo),
-  });
-  writeFileSync(target, body);
+  const todayISO = todayISODate();
+  const fetchedAtISO = nowISOTimestamp();
+  const project = opts.project ?? deriveProject(payload.repo);
+  const { id, path: target } = issueTicketID(
+    vault,
+    triageDir,
+    slug,
+    (id) =>
+      renderTicket({
+        id,
+        payload,
+        normalised,
+        todayISO,
+        fetchedAtISO,
+        project,
+      }),
+  );
   return { path: target, reused: false, ticketID: id };
 }
 

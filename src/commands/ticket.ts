@@ -1,9 +1,9 @@
 import { Command, Option } from "commander";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { renderManualTicket } from "../lib/render.ts";
 import {
-  nextTicketID,
+  issueTicketID,
   nowISOTimestamp,
   slugify,
   todayISODate,
@@ -60,7 +60,6 @@ export function runTicketNew(opts: TicketNewOptions): TicketNewResult {
   const triageDir = join(vault, "tickets", "triage");
   mkdirSync(triageDir, { recursive: true });
 
-  const id = nextTicketID(vault);
   const slug = slugify(title);
   if (slug.length === 0) {
     throw new Error(
@@ -68,27 +67,23 @@ export function runTicketNew(opts: TicketNewOptions): TicketNewResult {
     );
   }
 
-  const target = join(triageDir, `${id}-${slug}.md`);
-  if (existsSync(target)) {
-    throw new Error(
-      `oteam ticket new: target already exists at ${target} — ID scan collision`,
-    );
-  }
+  const todayISO = todayISODate();
+  const fetchedAtISO = nowISOTimestamp();
+  const { id, path: target } = issueTicketID(vault, triageDir, slug, (id) =>
+    renderManualTicket({
+      id,
+      title,
+      todayISO,
+      fetchedAtISO,
+      team: opts.team ?? "product",
+      project: opts.project ?? null,
+      repo: repo && repo.length > 0 ? repo : null,
+      blockedBy,
+      priority: opts.priority ?? "medium",
+      labels: opts.labels ?? [],
+    }),
+  );
 
-  const body = renderManualTicket({
-    id,
-    title,
-    todayISO: todayISODate(),
-    fetchedAtISO: nowISOTimestamp(),
-    team: opts.team ?? "product",
-    project: opts.project ?? null,
-    repo: repo && repo.length > 0 ? repo : null,
-    blockedBy,
-    priority: opts.priority ?? "medium",
-    labels: opts.labels ?? [],
-  });
-
-  writeFileSync(target, body, "utf8");
   return { ticketID: id, path: target };
 }
 
