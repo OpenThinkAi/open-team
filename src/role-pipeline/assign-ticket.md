@@ -551,7 +551,7 @@ git -C "$WORKTREE" merge-base --is-ancestor "agt/$(echo "$TICKET_ID" | tr '[:upp
 - **Not yet merged, and you ARE the merge step** (standalone with push enabled, or the orchestrator's merge subagent): run `stamp merge` + the push path for the worktree's `$MODE` (per Step 5a/5b/5c), then continue to Step 2.
 - **Already merged:** continue to Step 2.
 
-**Step 2 — Archive + source-side cleanup.** The change is on `origin/<base>`. Update `state: done`, append a comment confirming what shipped, and archive — `oteam archive <id>` (or `mv` to `archive/YYYY-MM/`, creating the month folder if needed). Then run source-side cleanup, cross-referencing `source.type` from frontmatter:
+**Step 2 — Archive + source-side cleanup.** The change is on `origin/<base>`. Update `state: done`, append a comment confirming what shipped, and archive — `oteam archive <id>`. Raw `mv` is forbidden as an archive mechanism — `oteam archive` is the only sanctioned closeout move (`oteam doctor` will flag bypasses as `done-unarchived` or `ghost-archive`). Then run source-side cleanup, cross-referencing `source.type` from frontmatter:
 
 - `github`: close the originating GH issue and remove the `agent:assigned` label (if `linked-github:` is set):
   ```sh
@@ -562,6 +562,14 @@ git -C "$WORKTREE" merge-base --is-ancestor "agt/$(echo "$TICKET_ID" | tr '[:upp
 - `manual` / `jira` / `notion`: no source-side cleanup; the vault ticket is the only artifact.
 
 (Vault-only tickets, `repo:` empty, have no branch to merge — treat them as the "already merged" path and archive directly.)
+
+**Step 3 — Refresh installed pipeline copy.** If the merged diff touched any file under `src/role-pipeline/` (check with `git diff origin/<base>~1..origin/<base> --name-only | grep 'src/role-pipeline/'`), run `oteam install-commands` so running conductors (`/dispatch`, `/implement-project`) pick up the change immediately. This is a no-op when the diff didn't touch role-pipeline files and is always safe to run regardless.
+
+```sh
+if git diff "origin/${BASE_BRANCH}~1..origin/${BASE_BRANCH}" --name-only 2>/dev/null | grep -q 'src/role-pipeline/'; then
+    oteam install-commands
+fi
+```
 
 STOP with `✅ DONE — merged and archived`.
 

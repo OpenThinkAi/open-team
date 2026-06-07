@@ -130,3 +130,64 @@ describe("role-pipeline skill registration (issue #16)", () => {
     assert.match(body, /GATE-POINT 2/);
   });
 });
+
+describe("role-pipeline closeout archive enforcement (AGT-448)", () => {
+  /**
+   * Regression guards: assign-ticket.md Phase 5 Step 2 must use `oteam archive`
+   * as the ONLY sanctioned closeout move. The "or mv to archive/YYYY-MM/" wording
+   * was the loophole that produced AGT-244/249 and AGT-372–375 drift.
+   *
+   * Positive: `oteam archive` must be present in Phase 5.
+   * Negative: the "or mv to archive/" alternative must NOT appear.
+   * The negative assertion is intentionally narrow so it doesn't false-positive
+   * on a rewrite that preserves the intent correctly — the positive assertion
+   * is the primary guard.
+   */
+  it("assign-ticket.md Phase 5 Step 2 uses oteam archive as the archive command", () => {
+    const body = readFileSync(join(roleDir, "assign-ticket.md"), "utf8");
+    // Positive: the authoritative archive command must appear
+    assert.match(
+      body,
+      /oteam archive <id>/,
+      "assign-ticket.md must use 'oteam archive <id>' as the archive command in Phase 5 Step 2",
+    );
+  });
+
+  it("assign-ticket.md Phase 5 Step 2 does NOT offer raw mv as an archive alternative", () => {
+    const body = readFileSync(join(roleDir, "assign-ticket.md"), "utf8");
+    // Negative: the "or mv to archive/YYYY-MM/" loophole must not appear
+    // (this pattern matched the exact wording that allowed agents to bypass oteam archive)
+    assert.doesNotMatch(
+      body,
+      /or [`']?mv[`']? to [`']?archive\//i,
+      "assign-ticket.md must NOT offer 'mv to archive/' as an alternative to 'oteam archive'",
+    );
+  });
+
+  it("assign-ticket.md Phase 5 includes a step to refresh the installed pipeline copy", () => {
+    const body = readFileSync(join(roleDir, "assign-ticket.md"), "utf8");
+    assert.match(
+      body,
+      /oteam install-commands/,
+      "assign-ticket.md Phase 5 must include 'oteam install-commands' to refresh running conductors",
+    );
+  });
+
+  it("_ticket-lane.md GATE-POINT 2 names oteam archive explicitly", () => {
+    const body = readFileSync(join(roleDir, "_ticket-lane.md"), "utf8");
+    assert.match(
+      body,
+      /oteam archive/,
+      "_ticket-lane.md GATE-POINT 2 must name 'oteam archive' rather than just 'archive'",
+    );
+  });
+
+  it("implement-project.md merge gate names oteam archive explicitly", () => {
+    const body = readFileSync(join(roleDir, "implement-project.md"), "utf8");
+    assert.match(
+      body,
+      /oteam archive/,
+      "implement-project.md merge gate must name 'oteam archive' rather than just 'archive'",
+    );
+  });
+});

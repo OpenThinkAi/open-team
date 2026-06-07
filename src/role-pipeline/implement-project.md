@@ -122,7 +122,7 @@ before merge). The lane defines the return-marker interpretations and the
 
 This is the lane's **GATE-POINT 2**, batched across the wave. Once every ticket in the wave is GREEN (stamp review passed), present the ready-to-merge set **together**: ticket, one-paragraph summary, target branch, review status. Ask once: "Approve merges for this wave?"
 
-On approval, for each ticket dispatch a final **merge subagent** (core subroutine, but the instruction is: run `stamp merge` + the stamp push path per the skill's Phase 5, then archive). After each lands on `origin/main`, notify immediately: `🔔 AGT-XXX merged to <repo> as <sha>` + one sentence on what it did. If a stamp-merge succeeds but the GitHub mirror push is rejected, **SURFACE — never auto-reconcile** divergence.
+On approval, for each ticket dispatch a final **merge subagent** (core subroutine, but the instruction is: run `stamp merge` + the stamp push path per the skill's Phase 5, then **`oteam archive <id>`** (never raw `mv`)). After each lands on `origin/main`, notify immediately: `🔔 AGT-XXX merged to <repo> as <sha>` + one sentence on what it did. If a stamp-merge succeeds but the GitHub mirror push is rejected, **SURFACE — never auto-reconcile** divergence.
 
 ### 2e — User-action tickets
 

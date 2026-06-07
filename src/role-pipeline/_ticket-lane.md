@@ -161,7 +161,7 @@ Run the core subroutine for the **implementation** role (subagent implements, te
 summary, target branch, review status. After approval, dispatch a final **merge
 subagent** (core subroutine, but **foreground — `run_in_background: false`**, per the
 merge-phase exception in the core subroutine; the instruction is: run `stamp merge`
-+ the stamp push path per the skill's Phase 5, then archive). After it lands on
++ the stamp push path per the skill's Phase 5, then **`oteam archive <id>`** (never raw `mv` — `oteam doctor` will flag bypasses)). After it lands on
 `origin/main`, notify immediately: `🔔 AGT-XXX merged to <repo> as <sha>` + one
 sentence on what it did. If a stamp-merge succeeds but the GitHub mirror push is
 rejected, **SURFACE — never auto-reconcile** divergence.

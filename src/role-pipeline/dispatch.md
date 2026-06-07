@@ -142,7 +142,7 @@ mechanics, return-marker interpretation, the non-stamp PR lane — is per the la
 
 After the ticket lands (or a PR is open):
 
-- Mark the ticket done and update its `linked-pr`/merge ref; archive per the lane.
+- Mark the ticket done and update its `linked-pr`/merge ref; run `oteam archive <id>` (never raw `mv` — see assign-ticket.md Phase 5 Step 2 for the close-out steps).
 - **Release the lease**: `gh issue edit <n> --repo <owner/repo> --remove-label "agent:assigned"` (a stamp-merge with `Closes #n` auto-closes the issue; a non-stamp PR closes it on merge).
 - Notify: `🔔 <repo>#<n> shipped as <sha>` (or `PR #<pr> opened`) + one sentence.
 - If validation or the build surfaced an unrelated bug, offer to file it
