@@ -1,16 +1,24 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runDoctor, type IssueClass } from "../src/commands/doctor.ts";
+import {
+  HookExistsError,
+  installHook,
+  runDoctor,
+  type IssueClass,
+} from "../src/commands/doctor.ts";
 
 function ticket(
   id: string,
@@ -257,6 +265,154 @@ describe("oteam doctor --fix", () => {
         "utf8",
       );
       assert.match(migrated, /^state: in-progress$/m);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+/**
+ * Helper: init a bare git repo and a working tree so installHook has a valid
+ * git directory to query. Returns the work-tree root path.
+ */
+function makeGitRepo(): { root: string; cleanup: () => void } {
+  const root = mkdtempSync(join(tmpdir(), "oteam-hook-test-"));
+  const r = spawnSync("git", ["init", root], { encoding: "utf8" });
+  if (r.status !== 0) {
+    throw new Error(`git init failed: ${r.stderr}`);
+  }
+  // git init writes default hooks/ relative to .git — just ensure it exists
+  mkdirSync(join(root, ".git", "hooks"), { recursive: true });
+  return { root, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+}
+
+describe("oteam doctor --install-hook", () => {
+  it("writes a pre-commit hook with mode 0755", () => {
+    const { root, cleanup } = makeGitRepo();
+    try {
+      installHook({ vault: root });
+      const hookPath = join(root, ".git", "hooks", "pre-commit");
+      assert.ok(existsSync(hookPath), "hook file was created");
+      // mode bits: 0755
+      const mode = statSync(hookPath).mode & 0o777;
+      assert.equal(mode, 0o755, "hook is executable (0755)");
+      const body = readFileSync(hookPath, "utf8");
+      assert.match(body, /oteam doctor/, "hook body invokes oteam doctor");
+      assert.match(body, /tickets|archive|projects/, "hook filters on vault paths");
+      assert.match(body, /--no-verify/, "hook mentions no-verify bypass in its body");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("refuses to overwrite an existing hook without --force", () => {
+    const { root, cleanup } = makeGitRepo();
+    try {
+      const hookPath = join(root, ".git", "hooks", "pre-commit");
+      writeFileSync(hookPath, "#!/bin/sh\n# custom hook\n");
+      // installHook should throw HookExistsError (not call process.exit)
+      assert.throws(
+        () => installHook({ vault: root }),
+        (err: unknown) => err instanceof HookExistsError,
+        "throws HookExistsError when hook exists and --force not passed",
+      );
+      // original content preserved
+      assert.match(readFileSync(hookPath, "utf8"), /custom hook/);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("overwrites an existing hook when --force is passed", () => {
+    const { root, cleanup } = makeGitRepo();
+    try {
+      const hookPath = join(root, ".git", "hooks", "pre-commit");
+      writeFileSync(hookPath, "#!/bin/sh\n# custom hook\n");
+      installHook({ vault: root, force: true });
+      const body = readFileSync(hookPath, "utf8");
+      assert.match(body, /oteam doctor/, "hook replaced with oteam template");
+      assert.ok(!/custom hook/.test(body), "original content gone");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("honors core.hooksPath when set", () => {
+    const { root, cleanup } = makeGitRepo();
+    try {
+      const customHooksDir = join(root, "custom-hooks");
+      mkdirSync(customHooksDir, { recursive: true });
+      spawnSync("git", ["-C", root, "config", "core.hooksPath", customHooksDir], {
+        encoding: "utf8",
+      });
+      installHook({ vault: root });
+      const hookPath = join(customHooksDir, "pre-commit");
+      assert.ok(existsSync(hookPath), "hook written to core.hooksPath location");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("end-to-end: installed hook exits 1 on a dirty vault and 0 on a clean one", () => {
+    const { root, cleanup } = makeGitRepo();
+    try {
+      // Setup vault directories and a clean project
+      for (const s of ["triage", "refined", "in-progress", "blocked"]) {
+        mkdirSync(join(root, "tickets", s), { recursive: true });
+      }
+      mkdirSync(join(root, "archive", "2026-05"), { recursive: true });
+      mkdirSync(join(root, "projects"), { recursive: true });
+
+      // Install the oteam pre-commit hook
+      installHook({ vault: root });
+
+      // Seed a ghost-archive ticket (error-class issue) and stage it
+      const ghostDir = join(root, "tickets", "archive", "2026-05");
+      mkdirSync(ghostDir, { recursive: true });
+      const ghostPath = join(ghostDir, "AGT-099-ghost.md");
+      writeFileSync(
+        ghostPath,
+        ticket("AGT-099", "triage", { project: "test" }),
+      );
+      spawnSync("git", ["-C", root, "add", ghostPath], { encoding: "utf8" });
+
+      // Build a minimal shim so 'oteam' resolves to the local dist/index.js,
+      // even when the package isn't globally installed.
+      const distIndex = new URL("../dist/index.js", import.meta.url).pathname;
+      const shimDir = mkdtempSync(join(tmpdir(), "oteam-shim-"));
+      const shimPath = join(shimDir, "oteam");
+      writeFileSync(shimPath, `#!/usr/bin/env node\nimport("${distIndex}");\n`, {
+        encoding: "utf8",
+      });
+      chmodSync(shimPath, 0o755);
+      const testEnv = {
+        ...process.env,
+        HOME: process.env.HOME,
+        // Prepend shim dir so 'oteam' resolves to the local build
+        PATH: `${shimDir}:${process.env.PATH ?? ""}`,
+        // Suppress interactive workspace prompts in the hook run
+        PRODUCT_VAULT_PATH: root,
+      };
+
+      // Running the hook directly should exit non-zero (oteam doctor finds error)
+      const hookPath = join(root, ".git", "hooks", "pre-commit");
+      const r1 = spawnSync(hookPath, [], { cwd: root, encoding: "utf8", env: testEnv });
+      assert.notEqual(r1.status, 0, "hook exits non-zero for dirty vault");
+
+      // Unstage and remove the ghost ticket; seed a clean ticket and stage it
+      spawnSync("git", ["-C", root, "reset", ghostPath], { encoding: "utf8" });
+      rmSync(ghostPath, { force: true });
+      const cleanPath = join(root, "tickets", "triage", "AGT-001-ok.md");
+      writeFileSync(
+        cleanPath,
+        ticket("AGT-001", "triage", { project: "test" }),
+      );
+      spawnSync("git", ["-C", root, "add", cleanPath], { encoding: "utf8" });
+
+      const r2 = spawnSync(hookPath, [], { cwd: root, encoding: "utf8", env: testEnv });
+      assert.equal(r2.status, 0, "hook exits 0 for a clean vault");
+      // Clean up shim after r2 so PATH is valid for both hook runs
+      rmSync(shimDir, { recursive: true, force: true });
     } finally {
       cleanup();
     }

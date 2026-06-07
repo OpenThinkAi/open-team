@@ -60,6 +60,29 @@ A ticket's `state:` frontmatter must always match its containing folder under `t
 
 For the simplest single-workspace setup, run `oteam init` (creates and registers `~/openteam/`). To use an existing tree, register it via `oteam config workspace add <path>` or set `PRODUCT_VAULT_PATH`. For multiple workspaces (personal + work, etc.) see [Config & multiple workspaces](#config--multiple-workspaces).
 
+### Vault pre-commit hook
+
+`oteam doctor --install-hook` writes a git pre-commit hook into your vault's hooks directory that runs `oteam doctor` before every commit and blocks the commit if any error-class findings are present.
+
+```sh
+# Install the hook (run from any directory; resolves vault from config/env)
+oteam doctor --install-hook
+
+# Overwrite an existing pre-commit hook
+oteam doctor --install-hook --force
+
+# Target a specific workspace by name or path
+oteam doctor --install-hook --workspace my-vault
+```
+
+**What it checks.** The hook runs the full `oteam doctor` validator, which covers: ghost tickets under `tickets/archive/`, done-but-unarchived tickets, state↔folder mismatches, legacy `qa`-state tickets, duplicate AGT IDs, malformed frontmatter, and stale project status. Any error-class finding causes the commit to be rejected with a human-readable report. Warnings are printed but do not block.
+
+**Fast-path.** The hook short-circuits immediately (exits 0) when no staged file touches `tickets/`, `archive/`, or `projects/`. Pure code or config commits are unaffected.
+
+**Bypass.** `git commit --no-verify` skips the hook for one-off emergency commits (standard git behavior).
+
+**`core.hooksPath` support.** The installer respects `core.hooksPath` — if your vault configures a non-default hooks directory, the hook is written there.
+
 ## Subcommands
 
 ```sh
