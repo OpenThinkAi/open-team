@@ -6,7 +6,7 @@ import {
   renameSync,
   writeFileSync,
 } from "node:fs";
-import { basename, join, relative, sep } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 import { Command, Option } from "commander";
 import {
@@ -326,18 +326,34 @@ export interface InstallHookOptions {
   force?: boolean;
 }
 
+/** Thrown by installHook when a hook exists and --force was not passed. */
+export class HookExistsError extends Error {
+  constructor(public readonly hookPath: string) {
+    super(
+      `a pre-commit hook already exists at ${hookPath} — pass --force to overwrite it`,
+    );
+    this.name = "HookExistsError";
+  }
+}
+
 /**
  * Resolve the path to the bundled pre-commit hook template.
- * When running from source (tsx), it's at src/hooks/pre-commit relative to
- * this file. When running from a compiled dist/, it's at dist/hooks/pre-commit
- * relative to the package root (two dirs up from dist/index.js).
+ *
+ * tsup compiles src/commands/doctor.ts → dist/index.js (flat output);
+ * import.meta.dirname is therefore `<pkg>/dist/`. The hook template is copied
+ * to `<pkg>/dist/hooks/pre-commit` by the build script.
+ *
+ * When running under tsx (dev / tests) import.meta.dirname is
+ * `<pkg>/src/commands/`, so the sibling `<pkg>/src/hooks/pre-commit` is
+ * found via the `../hooks/` candidate.
  */
 function bundledHookPath(): string {
-  // __dirname is dist/ in the compiled output; resolve relative to it
+  // Candidate 1: <thisDir>/hooks/pre-commit  — compiled (dist/; tsup flat output)
+  // Candidate 2: <thisDir>/../hooks/pre-commit — tsx dev (src/commands/ → src/hooks/)
+  const thisDir = import.meta.dirname;
   const candidates = [
-    join(import.meta.dirname ?? __dirname, "hooks", "pre-commit"),
-    join(import.meta.dirname ?? __dirname, "..", "hooks", "pre-commit"),
-    join(import.meta.dirname ?? __dirname, "..", "src", "hooks", "pre-commit"),
+    join(thisDir, "hooks", "pre-commit"),
+    join(thisDir, "..", "hooks", "pre-commit"),
   ];
   for (const p of candidates) {
     if (existsSync(p)) return p;
@@ -353,22 +369,17 @@ function bundledHookPath(): string {
 export function installHook(opts: InstallHookOptions = {}): void {
   const vault = resolveVaultPath({ flagValue: opts.vault });
 
-  // Resolve hooks dir honoring core.hooksPath
+  // Resolve hooks dir, honouring core.hooksPath.
+  // `git -C <vault> rev-parse --git-path hooks` returns:
+  //   - an absolute path  when core.hooksPath is set to an absolute path, or
+  //   - a path relative to the work-tree root otherwise (e.g. ".git/hooks").
+  // Normalise to absolute with resolve(vault, raw) — resolve(x, absPath) → absPath.
   let hooksDir: string;
   try {
-    hooksDir = execFileSync("git", ["-C", vault, "rev-parse", "--git-path", "hooks"], {
+    const raw = execFileSync("git", ["-C", vault, "rev-parse", "--git-path", "hooks"], {
       encoding: "utf8",
     }).trim();
-    // git outputs a relative path when inside the work tree — make it absolute
-    if (!hooksDir.startsWith("/")) {
-      // relative to vault's .git
-      const gitDir = execFileSync("git", ["-C", vault, "rev-parse", "--git-dir"], {
-        encoding: "utf8",
-      }).trim();
-      const absGitDir = gitDir.startsWith("/") ? gitDir : join(vault, gitDir);
-      // rev-parse --git-path hooks is relative to .git/ when it's the default
-      hooksDir = join(absGitDir, "..", hooksDir);
-    }
+    hooksDir = isAbsolute(raw) ? raw : resolve(vault, raw);
   } catch {
     throw new Error(
       `"${vault}" does not appear to be a git repository — cannot resolve hooks directory`,
@@ -379,11 +390,7 @@ export function installHook(opts: InstallHookOptions = {}): void {
   const hookDest = join(hooksDir, "pre-commit");
 
   if (existsSync(hookDest) && !opts.force) {
-    process.stderr.write(
-      `oteam doctor --install-hook: a pre-commit hook already exists at ${hookDest}\n` +
-        "Pass --force to overwrite it.\n",
-    );
-    process.exit(1);
+    throw new HookExistsError(hookDest);
   }
 
   const template = readFileSync(bundledHookPath(), "utf8");
@@ -420,7 +427,15 @@ export function buildDoctorCommand(): Command {
         vault?: string;
       }) => {
         if (opts.installHook) {
-          installHook({ vault: opts.workspace ?? opts.vault, force: opts.force });
+          try {
+            installHook({ vault: opts.workspace ?? opts.vault, force: opts.force });
+          } catch (err) {
+            if (err instanceof HookExistsError) {
+              process.stderr.write(`oteam doctor --install-hook: ${err.message}\n`);
+              process.exit(1);
+            }
+            throw err;
+          }
           return;
         }
         const result = runDoctor({

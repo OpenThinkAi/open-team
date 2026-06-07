@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -12,7 +13,12 @@ import {
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { installHook, runDoctor, type IssueClass } from "../src/commands/doctor.ts";
+import {
+  HookExistsError,
+  installHook,
+  runDoctor,
+  type IssueClass,
+} from "../src/commands/doctor.ts";
 
 function ticket(
   id: string,
@@ -302,29 +308,14 @@ describe("oteam doctor --install-hook", () => {
   it("refuses to overwrite an existing hook without --force", () => {
     const { root, cleanup } = makeGitRepo();
     try {
-      installHook({ vault: root }); // first install
-      // Second install without --force should call process.exit(1).
-      // Capture that via a thrown error from the mock or by checking the side-effect.
-      // We verify the original hook body is preserved (not overwritten).
       const hookPath = join(root, ".git", "hooks", "pre-commit");
       writeFileSync(hookPath, "#!/bin/sh\n# custom hook\n");
-      let exitCode: number | undefined;
-      const origExit = process.exit.bind(process);
-      // Temporarily override process.exit to capture the code
-      (process as NodeJS.Process & { exit: (code?: number) => never }).exit = (
-        code?: number,
-      ) => {
-        exitCode = code;
-        throw new Error(`process.exit(${code})`);
-      };
-      try {
-        installHook({ vault: root });
-      } catch {
-        // expected — we threw from our process.exit override
-      } finally {
-        (process as NodeJS.Process & { exit: (code?: number) => never }).exit = origExit;
-      }
-      assert.equal(exitCode, 1, "exits 1 when hook exists and --force not passed");
+      // installHook should throw HookExistsError (not call process.exit)
+      assert.throws(
+        () => installHook({ vault: root }),
+        (err: unknown) => err instanceof HookExistsError,
+        "throws HookExistsError when hook exists and --force not passed",
+      );
       // original content preserved
       assert.match(readFileSync(hookPath, "utf8"), /custom hook/);
     } finally {
@@ -385,21 +376,33 @@ describe("oteam doctor --install-hook", () => {
       );
       spawnSync("git", ["-C", root, "add", ghostPath], { encoding: "utf8" });
 
+      // Build a minimal shim so 'oteam' resolves to the local dist/index.js,
+      // even when the package isn't globally installed.
+      const distIndex = new URL("../dist/index.js", import.meta.url).pathname;
+      const shimDir = mkdtempSync(join(tmpdir(), "oteam-shim-"));
+      const shimPath = join(shimDir, "oteam");
+      writeFileSync(shimPath, `#!/usr/bin/env node\nimport("${distIndex}");\n`, {
+        encoding: "utf8",
+      });
+      chmodSync(shimPath, 0o755);
+      const testEnv = {
+        ...process.env,
+        HOME: process.env.HOME,
+        // Prepend shim dir so 'oteam' resolves to the local build
+        PATH: `${shimDir}:${process.env.PATH ?? ""}`,
+        // Suppress interactive workspace prompts in the hook run
+        PRODUCT_VAULT_PATH: root,
+      };
+
       // Running the hook directly should exit non-zero (oteam doctor finds error)
       const hookPath = join(root, ".git", "hooks", "pre-commit");
-      const r1 = spawnSync(hookPath, [], {
-        cwd: root,
-        encoding: "utf8",
-        env: { ...process.env, HOME: process.env.HOME, PATH: process.env.PATH },
-      });
-      // The hook runs oteam doctor; if oteam is not on PATH in CI skip gracefully
-      if (r1.status !== null && r1.status !== 127) {
-        assert.notEqual(r1.status, 0, "hook exits non-zero for dirty vault");
-      }
+      const r1 = spawnSync(hookPath, [], { cwd: root, encoding: "utf8", env: testEnv });
+      assert.notEqual(r1.status, 0, "hook exits non-zero for dirty vault");
 
       // Unstage and remove the ghost ticket; seed a clean ticket and stage it
       spawnSync("git", ["-C", root, "reset", ghostPath], { encoding: "utf8" });
       rmSync(ghostPath, { force: true });
+      rmSync(shimDir, { recursive: true, force: true });
       const cleanPath = join(root, "tickets", "triage", "AGT-001-ok.md");
       writeFileSync(
         cleanPath,
@@ -407,14 +410,8 @@ describe("oteam doctor --install-hook", () => {
       );
       spawnSync("git", ["-C", root, "add", cleanPath], { encoding: "utf8" });
 
-      const r2 = spawnSync(hookPath, [], {
-        cwd: root,
-        encoding: "utf8",
-        env: { ...process.env, HOME: process.env.HOME, PATH: process.env.PATH },
-      });
-      if (r2.status !== null && r2.status !== 127) {
-        assert.equal(r2.status, 0, "hook exits 0 for a clean vault");
-      }
+      const r2 = spawnSync(hookPath, [], { cwd: root, encoding: "utf8", env: testEnv });
+      assert.equal(r2.status, 0, "hook exits 0 for a clean vault");
     } finally {
       cleanup();
     }
