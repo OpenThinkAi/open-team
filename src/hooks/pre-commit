@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# oteam vault pre-commit hook
+# Installed by: oteam doctor --install-hook
+# Bypass with: git commit --no-verify
+set -euo pipefail
+
+# Fast-path: skip when no staged paths touch tickets/, archive/, or projects/.
+if ! git diff --cached --name-only | grep -qE '^(tickets|archive|projects)/'; then
+  exit 0
+fi
+
+VAULT="$(git rev-parse --show-toplevel)"
+if ! command -v oteam >/dev/null 2>&1; then
+  echo "oteam: command not found — skipping vault hygiene check" >&2
+  exit 0
+fi
+
+exec oteam doctor --workspace "$VAULT"

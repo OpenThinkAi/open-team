@@ -1,5 +1,13 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, join, relative, sep } from "node:path";
+import { execFileSync } from "node:child_process";
 import { Command, Option } from "commander";
 import {
   listMarkdownFiles,
@@ -313,6 +321,78 @@ function formatHuman(result: DoctorResult, fixMode: boolean): string {
   return lines.join("\n");
 }
 
+export interface InstallHookOptions {
+  vault?: string;
+  force?: boolean;
+}
+
+/**
+ * Resolve the path to the bundled pre-commit hook template.
+ * When running from source (tsx), it's at src/hooks/pre-commit relative to
+ * this file. When running from a compiled dist/, it's at dist/hooks/pre-commit
+ * relative to the package root (two dirs up from dist/index.js).
+ */
+function bundledHookPath(): string {
+  // __dirname is dist/ in the compiled output; resolve relative to it
+  const candidates = [
+    join(import.meta.dirname ?? __dirname, "hooks", "pre-commit"),
+    join(import.meta.dirname ?? __dirname, "..", "hooks", "pre-commit"),
+    join(import.meta.dirname ?? __dirname, "..", "src", "hooks", "pre-commit"),
+  ];
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  throw new Error(
+    "bundled pre-commit template not found — was the package built? " +
+      "(expected one of: " +
+      candidates.join(", ") +
+      ")",
+  );
+}
+
+export function installHook(opts: InstallHookOptions = {}): void {
+  const vault = resolveVaultPath({ flagValue: opts.vault });
+
+  // Resolve hooks dir honoring core.hooksPath
+  let hooksDir: string;
+  try {
+    hooksDir = execFileSync("git", ["-C", vault, "rev-parse", "--git-path", "hooks"], {
+      encoding: "utf8",
+    }).trim();
+    // git outputs a relative path when inside the work tree — make it absolute
+    if (!hooksDir.startsWith("/")) {
+      // relative to vault's .git
+      const gitDir = execFileSync("git", ["-C", vault, "rev-parse", "--git-dir"], {
+        encoding: "utf8",
+      }).trim();
+      const absGitDir = gitDir.startsWith("/") ? gitDir : join(vault, gitDir);
+      // rev-parse --git-path hooks is relative to .git/ when it's the default
+      hooksDir = join(absGitDir, "..", hooksDir);
+    }
+  } catch {
+    throw new Error(
+      `"${vault}" does not appear to be a git repository — cannot resolve hooks directory`,
+    );
+  }
+
+  mkdirSync(hooksDir, { recursive: true });
+  const hookDest = join(hooksDir, "pre-commit");
+
+  if (existsSync(hookDest) && !opts.force) {
+    process.stderr.write(
+      `oteam doctor --install-hook: a pre-commit hook already exists at ${hookDest}\n` +
+        "Pass --force to overwrite it.\n",
+    );
+    process.exit(1);
+  }
+
+  const template = readFileSync(bundledHookPath(), "utf8");
+  writeFileSync(hookDest, template, { encoding: "utf8" });
+  chmodSync(hookDest, 0o755);
+
+  process.stdout.write(`✓ installed pre-commit hook at ${hookDest}\n`);
+}
+
 export function buildDoctorCommand(): Command {
   return new Command("doctor")
     .description(
@@ -320,15 +400,29 @@ export function buildDoctorCommand(): Command {
     )
     .option("--fix", "Auto-correct the safe issue classes (moves files)")
     .option("--json", "Emit the report as JSON")
+    .option(
+      "--install-hook",
+      "Install a pre-commit git hook in the vault that runs oteam doctor before each commit",
+    )
+    .option(
+      "--force",
+      "With --install-hook: overwrite an existing pre-commit hook",
+    )
     .option("-w, --workspace <name-or-path>", "Use a specific registered workspace")
     .addOption(new Option("--vault <name-or-path>").hideHelp())
     .action(
       (opts: {
         fix?: boolean;
         json?: boolean;
+        installHook?: boolean;
+        force?: boolean;
         workspace?: string;
         vault?: string;
       }) => {
+        if (opts.installHook) {
+          installHook({ vault: opts.workspace ?? opts.vault, force: opts.force });
+          return;
+        }
         const result = runDoctor({
           vault: opts.workspace ?? opts.vault,
           fix: opts.fix,
